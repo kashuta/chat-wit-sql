@@ -1,0 +1,58 @@
+// Bets History service schema
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/bets-history-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL_BETS_HISTORY")
+}
+
+// User reference model
+model User {
+  id        Int         @id @default(autoincrement())
+  uuid      String      @unique
+  username  String
+  casinoBets CasinoBet[]
+  sportsBets SportsBet[]
+  
+  @@map("users")
+}
+
+// Casino bet model
+model CasinoBet {
+  id           Int      @id @default(autoincrement())
+  userId       Int      @map("user_id")
+  gameType     String   @map("game_type")
+  betAmount    Decimal  @map("bet_amount")
+  winAmount    Decimal? @map("win_amount")
+  currency     String
+  gameId       String   @map("game_id")
+  roundId      String?  @map("round_id")
+  status       String   // PENDING, SETTLED, CANCELED, etc.
+  createdAt    DateTime @default(now()) @map("created_at")
+  settledAt    DateTime? @map("settled_at")
+  user         User     @relation(fields: [userId], references: [id])
+  
+  @@map("casino_bets")
+}
+
+// Sports bet model
+model SportsBet {
+  id           Int      @id @default(autoincrement())
+  userId       Int      @map("user_id")
+  eventId      String   @map("event_id")
+  marketType   String   @map("market_type")
+  selectionId  String   @map("selection_id")
+  odds         Decimal
+  betAmount    Decimal  @map("bet_amount")
+  potentialWin Decimal  @map("potential_win")
+  currency     String
+  status       String   // OPEN, WON, LOST, CANCELED, etc.
+  createdAt    DateTime @default(now()) @map("created_at")
+  settledAt    DateTime? @map("settled_at")
+  user         User     @relation(fields: [userId], references: [id])
+  
+  @@map("sports_bets")
+} 

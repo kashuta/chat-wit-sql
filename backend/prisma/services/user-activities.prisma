@@ -1,0 +1,52 @@
+// User Activities service schema
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/user-activities-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL_USER_ACTIVITIES")
+}
+
+// User reference model
+model User {
+  id        Int         @id @default(autoincrement())
+  uuid      String      @unique
+  username  String
+  sessions  Session[]
+  activities Activity[]
+  
+  @@map("users")
+}
+
+// Session model
+model Session {
+  id             Int      @id @default(autoincrement())
+  userId         Int      @map("user_id")
+  sessionId      String   @unique @map("session_id")
+  deviceInfo     String?  @map("device_info")
+  ipAddress      String?  @map("ip_address")
+  userAgent      String?  @map("user_agent")
+  startTime      DateTime @default(now()) @map("start_time")
+  endTime        DateTime? @map("end_time")
+  isActive       Boolean  @default(true) @map("is_active")
+  user           User     @relation(fields: [userId], references: [id])
+  
+  @@map("sessions")
+}
+
+// Activity model
+model Activity {
+  id          Int      @id @default(autoincrement())
+  userId      Int      @map("user_id")
+  sessionId   String?  @map("session_id")
+  activityType String   @map("activity_type")
+  page        String?
+  action      String
+  metadata    Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+  user        User     @relation(fields: [userId], references: [id])
+  
+  @@map("activities")
+} 

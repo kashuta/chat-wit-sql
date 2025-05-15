@@ -10,7 +10,16 @@
     "lint": "eslint --ext .ts src packages",
     "lint:fix": "eslint --ext .ts src packages --fix",
     "format": "prettier --write 'src/**/*.ts' 'packages/**/*.ts'",
-    "clean": "rimraf dist"
+    "clean": "rimraf dist",
+    "prisma:generate": "node scripts/generate-prisma-clients.js",
+    "prisma:introspect": "npm run prisma:introspect:wallet && npm run prisma:introspect:bets && npm run prisma:introspect:activities && npm run prisma:introspect:finance",
+    "prisma:introspect:wallet": "prisma db pull --schema=prisma/services/wallet.prisma",
+    "prisma:introspect:bets": "prisma db pull --schema=prisma/services/bets-history.prisma",
+    "prisma:introspect:activities": "prisma db pull --schema=prisma/services/user-activities.prisma",
+    "prisma:introspect:finance": "prisma db pull --schema=prisma/services/financial-history.prisma",
+    "prisma:migrate": "node scripts/create-prisma-migration.js",
+    "prisma:studio": "prisma studio --schema=prisma/schema.prisma",
+    "db:connect": "node -e \"const { setupDatabaseConnections } = require('./dist/packages/execution/database'); setupDatabaseConnections().then(() => console.log('Database connections established')).catch(err => console.error('Failed to connect to databases:', err))\""
   },
   "repository": {
     "type": "git",
