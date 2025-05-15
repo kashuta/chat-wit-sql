@@ -11,6 +11,7 @@
     "lint:fix": "eslint --ext .ts src packages --fix",
     "format": "prettier --write 'src/**/*.ts' 'packages/**/*.ts'",
     "clean": "rimraf dist",
+    "test": "mocha -r ts-node/register -r tsconfig-paths/register 'test/**/*.test.ts'",
     "prisma:generate": "node scripts/generate-prisma-clients.js",
     "prisma:introspect": "npm run prisma:introspect:wallet && npm run prisma:introspect:bets && npm run prisma:introspect:activities && npm run prisma:introspect:finance",
     "prisma:introspect:wallet": "prisma db pull --schema=prisma/services/wallet.prisma",
@@ -47,12 +48,18 @@
     "zod": "^3.24.4"
   },
   "devDependencies": {
+    "@types/chai": "^5.2.2",
+    "@types/mocha": "^10.0.10",
+    "@types/sinon": "^17.0.4",
     "@typescript-eslint/eslint-plugin": "^8.32.1",
     "@typescript-eslint/parser": "^8.32.1",
+    "chai": "^5.2.0",
     "eslint": "^9.26.0",
     "eslint-config-prettier": "^10.1.5",
     "eslint-plugin-prettier": "^5.4.0",
+    "mocha": "^11.2.2",
     "prettier": "^3.5.3",
-    "rimraf": "^5.0.10"
+    "rimraf": "^5.0.10",
+    "sinon": "^20.0.0"
   }
 }
