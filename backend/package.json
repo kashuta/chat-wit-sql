@@ -13,6 +13,7 @@
     "clean": "rimraf dist",
     "test": "mocha -r ts-node/register -r tsconfig-paths/register 'test/**/*.test.ts'",
     "prisma:generate": "node scripts/generate-prisma-clients.js",
+    "prisma:introspect:all": "node scripts/introspect-all-databases.js",
     "prisma:introspect": "npm run prisma:introspect:wallet && npm run prisma:introspect:bets && npm run prisma:introspect:activities && npm run prisma:introspect:finance",
     "prisma:introspect:wallet": "prisma db pull --schema=prisma/services/wallet.prisma",
     "prisma:introspect:bets": "prisma db pull --schema=prisma/services/bets-history.prisma",

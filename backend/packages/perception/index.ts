@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { PerceptionResult, DatabaseService } from '@common/types';
 import { getOpenAIModel, createOutputParser } from '@common/llm';
 import { logDebug, logError, logInfo, logWarn } from '@common/logger';
+import { databaseKnowledge } from '@common/knowledge';
 
 /**
  * Schema for perception output validation
@@ -11,7 +12,21 @@ const perceptionSchema = z.object({
   confidence: z.number().min(0).max(1).describe('Confidence score for this interpretation'),
   entities: z.record(z.unknown()).nullable().describe('Extracted entities from the query'),
   requiredServices: z.array(
-    z.enum(['wallet', 'bets-history', 'user-activities', 'financial-history'] as const)
+    z.enum([
+      'wallet', 
+      'bets-history', 
+      'user-activities', 
+      'financial-history',
+      'affiliate',
+      'casino-st8',
+      'geolocation',
+      'kyc',
+      'notification',
+      'optimove',
+      'pam',
+      'payment-gateway',
+      'traffic'
+    ] as const)
   ).describe('Database services required to fulfill this query'),
   sqlQuery: z.string().nullable().describe('SQL query to execute, if applicable')
 });
@@ -46,11 +61,22 @@ export const analyzeQuery = async (query: string): Promise<PerceptionResult> => 
       content: `You are a query analyzer for a betting platform SQL assistant.
       Analyze the user query and determine its intent, confidence, and required database services.
       
+      ${databaseKnowledge.isLoaded() ? databaseKnowledge.getDatabaseDescriptionsForLLM() : `
       AVAILABLE DATABASE SERVICES:
-      - "wallet": Contains information about user balances, deposits, withdrawals limits
+      - "wallet": Contains information about user balances, deposits, withdrawals, transactions, bonuses
       - "bets-history": Contains information about user bets, games played, winnings, losses
       - "user-activities": Contains user login history, session data, feature usage, preferences
       - "financial-history": Contains financial transactions, deposits, withdrawals, bonuses, promotions
+      - "affiliate": Contains data about partnership programs and affiliate relationships
+      - "casino-st8": Contains integration with the St8 casino platform
+      - "geolocation": Contains information about user geographic location
+      - "kyc": Contains user verification data (Know Your Customer)
+      - "notification": Contains user notification settings and history
+      - "optimove": Contains integration with Optimove marketing platform
+      - "pam": Contains user account management data (Player Account Management)
+      - "payment-gateway": Contains payment management data and methods
+      - "traffic": Contains traffic tracking and analysis data
+      `}
       
       IMPORTANT RULES FOR IDENTIFYING REQUIRED SERVICES:
       1. Thoroughly analyze the query to identify ALL services that might contain relevant data
@@ -68,11 +94,7 @@ export const analyzeQuery = async (query: string): Promise<PerceptionResult> => 
       
       IMPORTANT: You must respond with a valid JSON object. Your response must be ONLY valid JSON without any text before or after it.
       
-      The "requiredServices" field MUST be an ARRAY containing one or more of these exact strings:
-      - "wallet"
-      - "bets-history"
-      - "user-activities"
-      - "financial-history"
+      The "requiredServices" field MUST be an ARRAY containing one or more of the available database services.
       
       Example response format:
       {
@@ -283,6 +305,62 @@ const inferServicesFromQuery = (query: string): DatabaseService[] => {
       queryLower.includes('баланс') || queryLower.includes('кошелек') || 
       queryLower.includes('лимит')) {
     services.add('wallet');
+  }
+  
+  if (queryLower.includes('partner') || queryLower.includes('affiliate') || 
+      queryLower.includes('партнер') || queryLower.includes('аффилиат')) {
+    services.add('affiliate');
+  }
+  
+  if (queryLower.includes('casino') || queryLower.includes('казино') || 
+      queryLower.includes('slot') || queryLower.includes('слот')) {
+    services.add('casino-st8');
+  }
+  
+  if (queryLower.includes('location') || queryLower.includes('country') || 
+      queryLower.includes('geo') || queryLower.includes('ip') ||
+      queryLower.includes('локация') || queryLower.includes('страна') || 
+      queryLower.includes('гео')) {
+    services.add('geolocation');
+  }
+  
+  if (queryLower.includes('kyc') || queryLower.includes('verify') || 
+      queryLower.includes('document') || queryLower.includes('identification') ||
+      queryLower.includes('верификац') || queryLower.includes('документ') || 
+      queryLower.includes('идентификац')) {
+    services.add('kyc');
+  }
+  
+  if (queryLower.includes('notification') || queryLower.includes('message') || 
+      queryLower.includes('alert') || queryLower.includes('email') || 
+      queryLower.includes('sms') || queryLower.includes('push') ||
+      queryLower.includes('уведомлен') || queryLower.includes('сообщен')) {
+    services.add('notification');
+  }
+  
+  if (queryLower.includes('marketing') || queryLower.includes('campaign') || 
+      queryLower.includes('маркетинг') || queryLower.includes('кампани')) {
+    services.add('optimove');
+  }
+  
+  if (queryLower.includes('account') || queryLower.includes('profile') || 
+      queryLower.includes('user') || queryLower.includes('setting') ||
+      queryLower.includes('аккаунт') || queryLower.includes('профиль') || 
+      queryLower.includes('пользовател') || queryLower.includes('настройк')) {
+    services.add('pam');
+  }
+  
+  if (queryLower.includes('payment') || queryLower.includes('method') || 
+      queryLower.includes('gateway') || queryLower.includes('provider') ||
+      queryLower.includes('оплат') || queryLower.includes('метод') || 
+      queryLower.includes('платеж')) {
+    services.add('payment-gateway');
+  }
+  
+  if (queryLower.includes('traffic') || queryLower.includes('utm') || 
+      queryLower.includes('source') || queryLower.includes('campaign') ||
+      queryLower.includes('трафик') || queryLower.includes('источник')) {
+    services.add('traffic');
   }
   
   // Если не смогли определить ни одного сервиса, возвращаем financial-history как наиболее общий

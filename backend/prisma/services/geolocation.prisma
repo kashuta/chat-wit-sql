@@ -1,0 +1,17 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/geolocation-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL_GEOLOCATION")
+}
+
+model IpLookup {
+  id        Int      @id @default(autoincrement())
+  userId    Int?
+  ip        String
+  meta      Json?
+  createdAt DateTime @default(now())
+}

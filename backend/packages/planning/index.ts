@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { QueryPlan, DatabaseService, PerceptionResult } from '@common/types';
 import { getOpenAIModel, createOutputParser } from '@common/llm';
+import { databaseKnowledge } from '@common/knowledge';
 
 /**
  * Schema for query plan output validation
@@ -8,13 +9,41 @@ import { getOpenAIModel, createOutputParser } from '@common/llm';
 const queryPlanSchema = z.object({
   steps: z.array(
     z.object({
-      service: z.enum(['wallet', 'bets-history', 'user-activities', 'financial-history'] as const),
+      service: z.enum([
+        'wallet', 
+        'bets-history', 
+        'user-activities', 
+        'financial-history',
+        'affiliate',
+        'casino-st8',
+        'geolocation',
+        'kyc',
+        'notification',
+        'optimove',
+        'pam',
+        'payment-gateway',
+        'traffic'
+      ] as const),
       description: z.string(),
       sqlQuery: z.string().optional(),
     })
   ).describe('Steps to execute to answer the query'),
   requiredServices: z.array(
-    z.enum(['wallet', 'bets-history', 'user-activities', 'financial-history'] as const)
+    z.enum([
+      'wallet', 
+      'bets-history', 
+      'user-activities', 
+      'financial-history',
+      'affiliate',
+      'casino-st8',
+      'geolocation',
+      'kyc',
+      'notification',
+      'optimove',
+      'pam',
+      'payment-gateway',
+      'traffic'
+    ] as const)
   ).describe('Database services required to answer this query'),
 });
 
@@ -24,14 +53,26 @@ type PlanningOutput = z.infer<typeof queryPlanSchema>;
 /**
  * System prompt for the planning module
  */
-const SYSTEM_PROMPT = `You are an AI assistant specialized in planning SQL queries for a sports betting and casino platform called Dante.
+const getSystemPrompt = (): string => {
+  const basePrompt = `You are an AI assistant specialized in planning SQL queries for a sports betting and casino platform called Dante.
 Your task is to plan the steps needed to answer the user's query efficiently.
 
+${databaseKnowledge.isLoaded() ? databaseKnowledge.getDetailedDatabaseDescriptionsForLLM() : `
 Available database services:
-- wallet: Contains information about user balances, deposits, withdrawals
-- bets-history: Contains information about user bets, games played, winnings
-- user-activities: Contains user login history, session data, feature usage
-- financial-history: Contains financial transactions, bonuses, promotions
+- wallet: Contains information about user balances, deposits, withdrawals, transactions, bonuses
+- bets-history: Contains information about user bets, games played, winnings, losses
+- user-activities: Contains user login history, session data, feature usage, preferences
+- financial-history: Contains financial transactions, deposits, withdrawals, bonuses, promotions
+- affiliate: Contains data about partnership programs and affiliate relationships
+- casino-st8: Contains integration with the St8 casino platform
+- geolocation: Contains information about user geographic location
+- kyc: Contains user verification data (Know Your Customer)
+- notification: Contains user notification settings and history
+- optimove: Contains integration with Optimove marketing platform
+- pam: Contains user account management data (Player Account Management)
+- payment-gateway: Contains payment management data and methods
+- traffic: Contains traffic tracking and analysis data
+`}
 
 For each service, you need to specify:
 1. Which service to query
@@ -57,6 +98,9 @@ Example response format:
   "requiredServices": ["financial-history"]
 }`;
 
+  return basePrompt;
+};
+
 /**
  * Creates a query plan based on the perception result
  * @param perceptionResult - Result from the perception module
@@ -78,7 +122,7 @@ export const createQueryPlan = async (
     // Системное сообщение
     const systemMessage = {
       role: 'system',
-      content: SYSTEM_PROMPT
+      content: getSystemPrompt()
     };
     
     // Пользовательское сообщение

@@ -22,7 +22,20 @@ export interface QueryResponse {
 /**
  * Database service identifiers 
  */
-export type DatabaseService = 'wallet' | 'bets-history' | 'user-activities' | 'financial-history';
+export type DatabaseService = 
+  'wallet' | 
+  'bets-history' | 
+  'user-activities' | 
+  'financial-history' | 
+  'affiliate' | 
+  'casino-st8' | 
+  'geolocation' | 
+  'kyc' | 
+  'notification' | 
+  'optimove' | 
+  'pam' | 
+  'payment-gateway' | 
+  'traffic';
 
 /**
  * SQL query with metadata

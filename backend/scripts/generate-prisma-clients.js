@@ -46,6 +46,23 @@ function generateClient(schemaPath) {
 
 // Generate clients for all schema files
 console.log(`Found ${schemaFiles.length} Prisma schema files`);
-schemaFiles.forEach(generateClient);
+for (const schemaFile of schemaFiles) {
+  const serviceName = path.basename(schemaFile, '.prisma');
+  
+  // First, introspect the database to update the schema, if the database exists
+  try {
+    console.log(`Introspecting database for ${serviceName}...`);
+    execSync(`npx prisma db pull --schema ${schemaFile}`, {
+      stdio: 'inherit',
+    });
+    console.log(`✅ Successfully introspected database for ${serviceName}`);
+  } catch (error) {
+    console.warn(`⚠️ Could not introspect database for ${serviceName}:`, error.message);
+    console.warn(`⚠️ Will use the existing schema file for ${serviceName}`);
+  }
+  
+  // Then generate the client
+  generateClient(schemaFile);
+}
 
 console.log('✅ All Prisma clients generated successfully'); 

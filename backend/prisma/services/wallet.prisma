@@ -1,4 +1,3 @@
-// Wallet service schema
 generator client {
   provider = "prisma-client-js"
   output   = "../../node_modules/.prisma/wallet-client"
@@ -9,47 +8,299 @@ datasource db {
   url      = env("DATABASE_URL_WALLET")
 }
 
-// User model
-model User {
-  id        Int         @id @default(autoincrement())
-  uuid      String      @unique
-  username  String
-  email     String      @unique
-  createdAt DateTime    @default(now()) @map("created_at")
-  updatedAt DateTime    @updatedAt @map("updated_at")
-  wallets   Wallet[]
-  
-  @@map("users")
+model Audit {
+  id            Int        @id @default(autoincrement())
+  operatorId    Int
+  transactionId Int
+  actionType    ActionType
+  reason        String?
+  timestamp     DateTime   @default(now())
+
+  @@index([transactionId])
 }
 
-// Wallet model
-model Wallet {
-  id          Int         @id @default(autoincrement())
-  userId      Int         @map("user_id")
-  balance     Decimal     @default(0)
-  currency    String
-  isActive    Boolean     @default(true) @map("is_active")
-  createdAt   DateTime    @default(now()) @map("created_at")
-  updatedAt   DateTime    @updatedAt @map("updated_at")
-  user        User        @relation(fields: [userId], references: [id])
-  transactions Transaction[]
-  
-  @@map("wallets")
+model Balance {
+  id           Int      @id @default(autoincrement())
+  amount       Int
+  userId       Int      @unique
+  version      Int      @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime
+  amountLocked Int?     @default(0)
+
+  @@index([userId])
 }
 
-// Transaction model
+model Bonus {
+  id                 Int       @id @default(autoincrement())
+  campaignId         String    @unique
+  status             String    @default("")
+  minDeposit         Int       @default(0)
+  bonusPercentage    Int       @default(0)
+  wager              Decimal   @default(0) @db.Decimal(10, 2)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime
+  bonusAmount        Int?
+  casinoBonusContrib Decimal?  @db.Decimal(10, 2)
+  sportBonusContrib  Decimal?  @db.Decimal(10, 2)
+  campaignName       String?
+  casino             Boolean   @default(false)
+  maxAcceptDuration  DateTime?
+  maxBonusAmount     Int       @default(0)
+  minimumSportOdd    Decimal?  @default(0) @db.Decimal(10, 2)
+  name               String    @default("")
+  product            String?
+  sport              Boolean   @default(false)
+  type               String    @default("")
+  userIds            String[]  @default([])
+  isLoggedIn         Boolean?
+  maxBonusWinAmount  Int?
+  startCampaignDate  DateTime?
+  content            Json      @default("[]")
+  buttonText         String?
+  fullBio            String?
+  imageUrl           String?
+  labels             String?
+  redirectUrl        String?
+  rulesUrl           String?
+  shortBio           String?
+  sportSettings      Json?
+  casinoSettings     Json?
+  hoursToAccept      Int?      @default(0)
+  hoursToDeposit     Int?      @default(0)
+  hoursToExpiration  Int?      @default(0)
+  fullBioHeader      String?
+  bonusCategory      String?
+  prioritySettings   Json?
+}
+
+model BonusBalance {
+  id           Int      @id @default(autoincrement())
+  userBonusId  Int
+  amount       Int
+  amountLocked Int
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime
+  userId       Int?
+  version      Int      @default(1)
+
+  @@unique([userBonusId, userId])
+}
+
+model FinancialReconciliation {
+  id                    Int                  @id @default(autoincrement())
+  userId                Int
+  originalTransactionId Int
+  relatedTransactionIds Int[]
+  amount                Int
+  status                ReconciliationStatus @default(PENDING)
+  notes                 String?
+  providerKind          String?
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime
+  bonusId               Int?
+  bonusStatus           String?
+  userBonusId           Int?
+
+  @@index([createdAt])
+  @@index([originalTransactionId])
+  @@index([userId])
+}
+
+model FreespinBonusBalance {
+  id                   Int      @id @default(autoincrement())
+  userId               Int
+  userBonusId          Int
+  freespinCurrentCount Int
+  externalBonusId      Int
+  freeGameType         Int
+  winType              Int
+  winSum               Int      @default(0)
+  gameId               Int
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime
+  freespinStartCount   Int      @default(0)
+  bonusTicketId        String   @default("")
+
+  @@unique([userId, externalBonusId])
+  @@unique([userId, userBonusId])
+}
+
+model GameCategoryBonusContribution {
+  id        Int      @id @default(autoincrement())
+  category  String
+  value     Decimal? @db.Decimal(10, 4)
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+
+  @@index([category])
+}
+
+model GameIdBonusContribution {
+  id         Int      @id @default(autoincrement())
+  gameId     Int
+  provider   String?
+  aggregator String?
+  value      Decimal? @db.Decimal(10, 4)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime
+
+  @@index([gameId])
+}
+
+model LockedBalance {
+  id             Int                    @id @default(autoincrement())
+  userId         Int
+  transactionId  Int
+  amount         Int
+  balanceType    LockedBalanceType
+  operation      LockedBalanceOperation
+  previousAmount Int
+  newAmount      Int
+  operationType  LockedBalanceOpType
+  roundClosed    Boolean
+  roundId        String?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime
+
+  @@index([createdAt])
+  @@index([roundId], type: Hash)
+  @@index([transactionId])
+  @@index([userId])
+}
+
 model Transaction {
-  id            Int       @id @default(autoincrement())
-  walletId      Int       @map("wallet_id")
-  amount        Decimal
-  type          String    // DEPOSIT, WITHDRAWAL, TRANSFER, etc.
-  status        String    // PENDING, APPROVED, REJECTED, etc.
-  reference     String?
-  description   String?
-  createdAt     DateTime  @default(now()) @map("created_at")
-  updatedAt     DateTime  @updatedAt @map("updated_at")
-  processedAt   DateTime? @map("processed_at")
-  wallet        Wallet    @relation(fields: [walletId], references: [id])
-  
-  @@map("transactions")
-} 
+  id                Int               @id @default(autoincrement())
+  amount            Int
+  type              TransactionType
+  status            TransactionStatus @default(PENDING)
+  sourceType        String?
+  userId            Int
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime
+  bonusBalanceId    Int?
+  isLockedProcessed Boolean           @default(false)
+  freespinId        Int?
+  bonusData         Json?
+  currency          String?
+  paymentMethod     String            @default("")
+
+  @@index([type])
+  @@index([userId])
+}
+
+model User {
+  id                     Int       @id
+  email                  String?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime
+  depositBlock           Boolean   @default(false)
+  withdrawalBlock        Boolean   @default(false)
+  deposiitBlockEndDate   DateTime?
+  withdrawalBlockEndDate DateTime?
+}
+
+model UserBonus {
+  id          Int       @id @default(autoincrement())
+  userId      Int
+  bonusId     Int
+  status      String?
+  acceptedAt  DateTime?
+  activatedAt DateTime?
+  expiredAt   DateTime?
+  canceledAt  DateTime?
+  bonusAmount Int?      @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime
+
+  @@unique([userId, bonusId])
+  @@index([expiredAt, status])
+}
+
+model WithdrawalRequest {
+  id            Int      @id @default(autoincrement())
+  userId        Int
+  amount        Int
+  statusHistory Json
+  operatorEmail String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime
+  transactionId Int
+  status        String   @default("PENDING")
+  paymentMethod String?
+  account       Json?
+  currency      String?
+  meta          Json?
+}
+
+enum ActionType {
+  APPROVED
+  REJECTED
+  ADJUSTED
+  DELETED
+  CANCELED
+  ROLLBACKED
+}
+
+enum LockedBalanceOpType {
+  DEBIT
+  CREDIT
+  CANCEL
+  PAYOUT
+  BUYIN
+}
+
+enum LockedBalanceOperation {
+  LOCK
+  UNLOCK
+}
+
+enum LockedBalanceType {
+  REAL
+  BONUS
+}
+
+enum PaymentMethod {
+  PaymentMethod1
+  PaymentMethod2
+  Bet
+  Winning
+  test
+}
+
+enum ReconciliationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  PROCESSED
+  INACTIVE_BONUS
+}
+
+enum TransactionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELED
+  ROLLBACKED
+}
+
+enum TransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  BET
+  WINNING
+  ADJUSTMENT
+  ROLLBACK
+  BETWIN
+  CHARGE
+  BONUS
+  REFUND
+  GIFT
+  BONUS_FREESPIN
+  FREESPIN
+  PAYOUT
+  ROLLBACK_DEBT
+  RECONCILIATION_WRITE_OFF
+  PROVIDER_CORRECTION_DEBIT
+  PROVIDER_CORRECTION_CREDIT
+}

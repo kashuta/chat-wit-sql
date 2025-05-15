@@ -53,3 +53,4 @@ coverage/
 # Project specific
 tasks.md
 PRD.md
+backend/data/database-descriptions.json

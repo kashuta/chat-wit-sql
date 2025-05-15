@@ -1,0 +1,50 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/kyc-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL_KYC")
+}
+
+model Document {
+  id             String   @id
+  frontSideId    String?
+  frontSideUrl   String?
+  backSideId     String?
+  backSideUrl    String?
+  portraitUrl    String?
+  type           String?
+  status         String?
+  documentNumber String?
+  issueDate      String?
+  expiryDate     String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime
+  userId         Int
+}
+
+model Requests {
+  id        Int      @id @default(autoincrement())
+  request   Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+}
+
+model User {
+  pamId              Int      @unique
+  applicantId        String
+  status             String
+  firstName          String?
+  middleName         String?
+  lastName           String?
+  gender             String?
+  dateOfBirth        String?
+  residenceCountry   String?
+  nationality        String?
+  portraitUrl        String?
+  verificationResult Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime
+}

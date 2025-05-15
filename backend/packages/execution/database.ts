@@ -3,6 +3,9 @@ import { getPrismaClient } from '@common/prisma';
 import { createTypedError } from '@common/utils';
 import { ErrorType } from '@common/types';
 
+// Map to track connection status
+const connectionStatus: Record<string, boolean> = {};
+
 /**
  * Execute a raw SQL query against a database service
  * @param query - SQL query object with service and query string
@@ -18,10 +21,12 @@ export const executeSqlQuery = async (
     console.log(`Executing query on ${service} database:`);
     console.log(sqlString);
     
-    // If we have connection issues or Prisma errors, we'll use mock data in development
-    if (process.env.NODE_ENV === 'development' && !isDbConnected(service)) {
-      console.warn(`Database ${service} not connected, using mock data`);
-      return getMockData(service);
+    // Check if the database connection is working
+    if (!await isDbConnected(service)) {
+      throw createTypedError(
+        ErrorType.DATABASE_ERROR,
+        `Database ${service} is not connected`
+      );
     }
     
     // Execute the query
@@ -39,70 +44,49 @@ export const executeSqlQuery = async (
   } catch (error) {
     console.error(`Error executing SQL query on ${query.service}:`, error);
     
+    // In development, we could provide more detailed error info
     if (process.env.NODE_ENV === 'development') {
-      // In development, return mock data if query fails
-      return getMockData(query.service);
+      throw createTypedError(
+        ErrorType.DATABASE_ERROR,
+        `Failed to execute query on ${query.service}: ${(error as Error).message}`
+      );
     }
     
+    // In production, provide a more generic error
     throw createTypedError(
       ErrorType.DATABASE_ERROR,
-      `Failed to execute query on ${query.service}: ${(error as Error).message}`
+      `Failed to execute query on ${query.service}`
     );
   }
 };
 
 /**
- * Check if database is connected
+ * Check if database is connected by performing a simple query
  * @param service - Database service to check
  * @returns Whether the database is connected
  */
-const isDbConnected = (service: DatabaseService): boolean => {
-  try {
-    // This is a simplified check - in production you would want a more robust check
-    const prisma = getPrismaClient(service);
-    return !!prisma;
-  } catch (error) {
-    return false;
+const isDbConnected = async (service: DatabaseService): Promise<boolean> => {
+  // Return cached status if available
+  if (connectionStatus[service] !== undefined) {
+    return connectionStatus[service];
   }
-};
-
-/**
- * Get mock data for a service when the database is not available
- * @param service - Database service to get mock data for
- * @returns Mock data for the service
- */
-const getMockData = (service: DatabaseService): Record<string, unknown>[] => {
-  switch (service) {
-    case 'wallet':
-      return [
-        { user_id: 1, balance: 1000, currency: 'USD' },
-        { user_id: 2, balance: 2500, currency: 'EUR' },
-        { user_id: 3, balance: 500, currency: 'USD' },
-      ];
+  
+  try {
+    const prisma = getPrismaClient(service);
     
-    case 'bets-history':
-      return [
-        { user_id: 1, bet_amount: 100, game_type: 'slots', created_at: new Date().toISOString() },
-        { user_id: 2, bet_amount: 50, game_type: 'poker', created_at: new Date().toISOString() },
-        { user_id: 3, bet_amount: 200, game_type: 'sports', created_at: new Date().toISOString() },
-      ];
+    // Try to execute a simple query to check connection
+    // This should be a lightweight query that works on any database
+    await prisma.$queryRaw`SELECT 1 as connected`;
     
-    case 'user-activities':
-      return [
-        { user_id: 1, action: 'login', created_at: new Date().toISOString() },
-        { user_id: 2, action: 'deposit', created_at: new Date().toISOString() },
-        { user_id: 3, action: 'bet', created_at: new Date().toISOString() },
-      ];
+    // Cache the connection status
+    connectionStatus[service] = true;
+    return true;
+  } catch (error) {
+    console.error(`Database ${service} connection check failed:`, error);
     
-    case 'financial-history':
-      return [
-        { user_id: 1, amount: 500, record_type: 'deposit', created_at: new Date().toISOString() },
-        { user_id: 2, amount: 100, record_type: 'withdrawal', created_at: new Date().toISOString() },
-        { user_id: 3, amount: 1000, record_type: 'deposit', created_at: new Date().toISOString() },
-      ];
-    
-    default:
-      return [];
+    // Cache the connection status
+    connectionStatus[service] = false;
+    return false;
   }
 };
 
@@ -111,47 +95,68 @@ const getMockData = (service: DatabaseService): Record<string, unknown>[] => {
  */
 export const setupDatabaseConnections = async (): Promise<void> => {
   try {
-    // Check environment variables
-    const requiredEnvVars = [
-      'DATABASE_URL_WALLET',
-      'DATABASE_URL_BETS_HISTORY',
-      'DATABASE_URL_USER_ACTIVITIES',
-      'DATABASE_URL_FINANCIAL_HISTORY',
+    // Define all database services
+    const services: DatabaseService[] = [
+      'wallet',
+      'bets-history',
+      'user-activities',
+      'financial-history',
+      'affiliate',
+      'casino-st8',
+      'geolocation',
+      'kyc',
+      'notification',
+      'optimove',
+      'pam',
+      'payment-gateway',
+      'traffic'
     ];
     
-    const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+    // Check environment variables
+    const envPrefix = 'DATABASE_URL_';
+    const missingEnvVars = services
+      .map(service => {
+        // Convert service name to env var name (e.g., 'bets-history' -> 'BETS_HISTORY')
+        const envSuffix = service.toUpperCase().replace(/-/g, '_');
+        return `${envPrefix}${envSuffix}`;
+      })
+      .filter(varName => !process.env[varName]);
     
     if (missingEnvVars.length > 0) {
       console.warn(`Missing database environment variables: ${missingEnvVars.join(', ')}`);
       console.warn('Some database connections may not work correctly');
     }
     
-    // Initialize Prisma clients
-    const services: DatabaseService[] = [
-      'wallet',
-      'bets-history',
-      'user-activities',
-      'financial-history',
-    ];
-    
-    // Pre-initialize clients
-    for (const service of services) {
+    // Check connections for all services
+    console.log('Checking database connections...');
+    const connectionPromises = services.map(async (service) => {
       try {
-        getPrismaClient(service);
-        console.log(`Initialized ${service} database client`);
+        const connected = await isDbConnected(service);
+        console.log(`${service} database: ${connected ? 'Connected ✅' : 'Not connected ❌'}`);
+        return { service, connected };
       } catch (error) {
-        console.error(`Failed to initialize ${service} database client:`, error);
+        console.error(`Failed to check ${service} database connection:`, error);
+        return { service, connected: false };
       }
-    }
+    });
     
-    console.log('Database setup complete');
+    const results = await Promise.all(connectionPromises);
+    const connectedCount = results.filter(r => r.connected).length;
+    
+    console.log(`Database connections established: ${connectedCount}/${services.length}`);
+    
+    if (connectedCount === 0 && process.env.NODE_ENV === 'production') {
+      throw new Error('No database connections could be established in production mode');
+    } else if (connectedCount === 0) {
+      console.warn('No database connections could be established. Running in development mode.');
+    }
   } catch (error) {
     console.error('Failed to set up database connections:', error);
     
     if (process.env.NODE_ENV === 'production') {
       throw error;
     } else {
-      console.warn('Running in development mode with mocked data');
+      console.warn('Running in development mode without database connections');
     }
   }
 }; 

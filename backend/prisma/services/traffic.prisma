@@ -1,0 +1,59 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/traffic-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL_TRAFFIC")
+}
+
+model AffiliatePartnerUserData {
+  id                 Int     @id @default(autoincrement())
+  userId             Int
+  isRegistered       Boolean
+  errorMessage       String?
+  affiliatePartnerId Int
+}
+
+model AffiliatePartners {
+  id            Int     @id @default(autoincrement())
+  name          String?
+  alias         String  @default("everymatrix")
+  feePercentage Int
+  status        String
+}
+
+model UserDevice {
+  id        Int      @id @default(autoincrement())
+  userId    Int?
+  deviceId  String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+  runtime   String?
+
+  @@index([userId])
+}
+
+model UserTrackingTags {
+  id          Int      @id @default(autoincrement())
+  userId      Int      @unique
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  btag        String?
+  createdAt   DateTime @default(now())
+}
+
+model UserTransactions {
+  id                         Int      @id @default(autoincrement())
+  userId                     Int
+  amount                     Int
+  transactionType            String
+  transactionStatus          String
+  transactionId              Int
+  sentStatus                 String   @default("PENDING")
+  errorMessage               String?
+  createdAt                  DateTime
+  affiliatePartnerUserDataId Int
+}

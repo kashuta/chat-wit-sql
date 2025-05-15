@@ -1,0 +1,126 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/payment-gateway-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL_PAYMENT_GATEWAY")
+}
+
+model FakeUserData {
+  id         String @id
+  userId     Int    @unique
+  phone      String
+  email      String
+  firstName  String @default("")
+  lastName   String @default("")
+  middleName String @default("")
+
+  @@index([userId])
+}
+
+model PaymentMethod {
+  id             String      @id
+  name           String
+  title          String
+  type           String
+  sort           Int
+  enabled        Boolean     @default(true)
+  method         String      @default("")
+  paymentSystem  String      @default("")
+  backofficeId   String?     @unique
+  logo           String?
+  maxCustomLimit Int?
+  maxThreshold   Int?
+  minCustomLimit Int?
+  minThreshold   Int?
+  simpleFields   String[]
+  trustedStatus  UserStatus?
+}
+
+model PaymentMethodField {
+  id              String   @id
+  name            String
+  placeholderText String   @default("")
+  errorText       String   @default("")
+  regex           String
+  type            String
+  sort            Int
+  values          String[] @default([])
+  paymentMethodId String
+
+  @@index([paymentMethodId])
+}
+
+model Provider {
+  id        String   @id
+  name      String
+  code      String   @unique
+  type      String[]
+  status    String
+  priority  Int      @default(0)
+  config    Json
+  metadata  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+
+  @@index([status, type])
+}
+
+model Transaction {
+  id             String    @id
+  providerId     String
+  externalId     String?
+  walletTxId     String?
+  type           String
+  status         String
+  amount         Int
+  currency       String
+  sourceAmount   Int
+  sourceCurrency String
+  attemptCount   Int       @default(0)
+  errorCode      String?
+  errorMessage   String?
+  metadata       Json?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime
+  completedAt    DateTime?
+  paymentMethod  String
+  userId         Int
+  campaignId     String?
+  rawRequest     Json?
+  rawResponse    Json?
+  version        Int       @default(0)
+
+  @@unique([id, version])
+  @@index([createdAt])
+  @@index([providerId])
+  @@index([providerId, status])
+  @@index([type, status])
+  @@index([userId, status])
+}
+
+model User {
+  userId        Int        @id @unique
+  trustedStatus UserStatus
+  depositSum    Int        @default(0)
+  withdrawalSum Int        @default(0)
+}
+
+model UserPaymentDetails {
+  id                String   @id
+  userId            Int
+  paymentMethodName String
+  type              String
+  data              Json
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime
+
+  @@unique([type, paymentMethodName, userId])
+}
+
+enum UserStatus {
+  FTD
+  TRUSTED
+}

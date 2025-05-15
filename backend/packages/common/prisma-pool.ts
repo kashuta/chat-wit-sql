@@ -83,6 +83,15 @@ export class PrismaConnectionPool extends EventEmitter {
         'bets-history': ConnectionStatus.DISCONNECTED,
         'user-activities': ConnectionStatus.DISCONNECTED,
         'financial-history': ConnectionStatus.DISCONNECTED,
+        'affiliate': ConnectionStatus.DISCONNECTED,
+        'casino-st8': ConnectionStatus.DISCONNECTED,
+        'geolocation': ConnectionStatus.DISCONNECTED,
+        'kyc': ConnectionStatus.DISCONNECTED,
+        'notification': ConnectionStatus.DISCONNECTED,
+        'optimove': ConnectionStatus.DISCONNECTED,
+        'pam': ConnectionStatus.DISCONNECTED,
+        'payment-gateway': ConnectionStatus.DISCONNECTED,
+        'traffic': ConnectionStatus.DISCONNECTED,
       },
     };
     
@@ -190,6 +199,15 @@ export class PrismaConnectionPool extends EventEmitter {
       'bets-history',
       'user-activities',
       'financial-history',
+      'affiliate',
+      'casino-st8',
+      'geolocation',
+      'kyc',
+      'notification',
+      'optimove',
+      'pam',
+      'payment-gateway',
+      'traffic'
     ];
     
     const results = new Map<DatabaseService, boolean>();
@@ -210,6 +228,15 @@ export class PrismaConnectionPool extends EventEmitter {
       'bets-history',
       'user-activities',
       'financial-history',
+      'affiliate',
+      'casino-st8',
+      'geolocation',
+      'kyc',
+      'notification',
+      'optimove',
+      'pam',
+      'payment-gateway',
+      'traffic'
     ];
     
     for (const service of services) {
@@ -280,6 +307,105 @@ export class PrismaConnectionPool extends EventEmitter {
           datasources: {
             db: {
               url: process.env.DATABASE_URL_FINANCIAL_HISTORY,
+            },
+          },
+          log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+        });
+        break;
+      
+      case 'affiliate':
+        client = new PrismaClient({
+          datasources: {
+            db: {
+              url: process.env.DATABASE_URL_AFFILIATE,
+            },
+          },
+          log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+        });
+        break;
+      
+      case 'casino-st8':
+        client = new PrismaClient({
+          datasources: {
+            db: {
+              url: process.env.DATABASE_URL_CASINO_ST8,
+            },
+          },
+          log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+        });
+        break;
+      
+      case 'geolocation':
+        client = new PrismaClient({
+          datasources: {
+            db: {
+              url: process.env.DATABASE_URL_GEOLOCATION,
+            },
+          },
+          log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+        });
+        break;
+      
+      case 'kyc':
+        client = new PrismaClient({
+          datasources: {
+            db: {
+              url: process.env.DATABASE_URL_KYC,
+            },
+          },
+          log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+        });
+        break;
+      
+      case 'notification':
+        client = new PrismaClient({
+          datasources: {
+            db: {
+              url: process.env.DATABASE_URL_NOTIFICATION,
+            },
+          },
+          log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+        });
+        break;
+      
+      case 'optimove':
+        client = new PrismaClient({
+          datasources: {
+            db: {
+              url: process.env.DATABASE_URL_OPTIMOVE,
+            },
+          },
+          log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+        });
+        break;
+      
+      case 'pam':
+        client = new PrismaClient({
+          datasources: {
+            db: {
+              url: process.env.DATABASE_URL_PAM,
+            },
+          },
+          log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+        });
+        break;
+      
+      case 'payment-gateway':
+        client = new PrismaClient({
+          datasources: {
+            db: {
+              url: process.env.DATABASE_URL_PAYMENT_GATEWAY,
+            },
+          },
+          log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+        });
+        break;
+      
+      case 'traffic':
+        client = new PrismaClient({
+          datasources: {
+            db: {
+              url: process.env.DATABASE_URL_TRAFFIC,
             },
           },
           log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
