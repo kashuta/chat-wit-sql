@@ -11,6 +11,17 @@ The Dante AI Data Agent leverages LangChain.js and LangGraph to create a modular
 - Transparent SQL query generation and explanation
 - Interactive data visualization through tables and charts
 
+## Project Status
+
+✅ **Development Status**: 92% Complete (77/84 tasks)
+
+The project is nearly complete with most core features implemented:
+- ✅ Backend API with modular architecture
+- ✅ Database integrations (wallet, bets-history, user-activities, financial-history)
+- ✅ SQL generation and execution
+- ✅ Frontend visualization components
+- ✅ Interactive query interface
+
 ## Architecture
 
 The project follows a modular architecture with three main components:
@@ -24,7 +35,7 @@ The project follows a modular architecture with three main components:
 ### Backend
 - Node.js with TypeScript (functional programming style)
 - LangChain.js for AI integrations
-- PostgreSQL database access (via mock implementations for now)
+- PostgreSQL database access with Prisma ORM
 - OpenAI 4o-mini models for natural language processing
 
 ### Frontend
@@ -37,12 +48,13 @@ The project follows a modular architecture with three main components:
 ### Prerequisites
 - Node.js 16+
 - npm 7+
+- PostgreSQL 15+ (or Docker)
 
 ### Installation
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
+git clone https://github.com/kashuta/chat-wit-sql.git
 cd chat-wit-sql
 ```
 
@@ -51,12 +63,22 @@ cd chat-wit-sql
 npm install
 ```
 
-3. Create environment files:
+3. Setup database connections:
 ```bash
-cp backend/.env.example backend/.env
+# If using Docker
+docker-compose up -d db
+
+# Generate Prisma clients
+cd backend
+npm run prisma:generate
 ```
 
-4. Update the `.env` file with your OpenAI API key and database connection strings.
+4. Update the `.env` file with your OpenAI API key:
+```bash
+# OpenAI API key is required for production use
+# In development mode, mock data is used if API key is invalid
+OPENAI_API_KEY=your_openai_api_key
+```
 
 ### Running the Project
 
@@ -78,21 +100,24 @@ npm run dev:frontend
 
 The services will be available at:
 - Backend: http://localhost:3000
-- Frontend: http://localhost:3001
+- Frontend: http://localhost:3004
 
 ## Project Structure
 
 ```
-├── backend/              # Backend codebase
-│   ├── packages/         # Core modules
-│   │   ├── common/       # Shared utilities and types
-│   │   ├── perception/   # Query analysis module
-│   │   ├── planning/     # SQL planning module
-│   │   └── execution/    # Query execution module
-│   └── src/              # Backend entry point
-├── frontend/             # Frontend codebase
-│   └── src/              # React application
-└── package.json          # Root package for monorepo setup
+├── backend/                # Backend codebase
+│   ├── packages/           # Core modules
+│   │   ├── common/         # Shared utilities and types
+│   │   ├── perception/     # Query analysis module
+│   │   ├── planning/       # SQL planning module
+│   │   └── execution/      # Query execution module
+│   ├── prisma/             # Prisma schema and database configuration
+│   │   └── services/       # Service-specific Prisma schemas
+│   ├── scripts/            # Utility scripts for setup
+│   └── src/                # Backend entry point
+├── frontend/               # Frontend codebase
+│   └── src/                # React application
+└── package.json            # Root package for monorepo setup
 ```
 
 ## Features
@@ -102,6 +127,15 @@ The services will be available at:
 - Confidence scoring for answers
 - Error handling with fallback strategies
 - Data visualization capabilities
+- Mock data for development without live databases
+
+## Database Services
+
+The system connects to four main database services:
+- **wallet**: User balances and transactions
+- **bets-history**: Casino and sports betting history
+- **user-activities**: User activity logs
+- **financial-history**: Financial transaction records
 
 ## License
 
