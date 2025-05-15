@@ -51,8 +51,15 @@ export const createChatPrompt = (
   humanPromptTemplate: string
 ): ChatPromptTemplate => {
   logDebug('Создание шаблона промпта для чата');
-  logDebug(`Системный промпт: ${systemPrompt.substring(0, 100)}...`);
-  logDebug(`Шаблон пользовательского промпта: ${humanPromptTemplate}`);
+  logDebug(`Системный промпт (первые 100 символов): ${systemPrompt.substring(0, 100)}...`);
+  
+  // Проверка наличия выражений внутри фигурных скобок в шаблоне
+  if (humanPromptTemplate.includes('{') && humanPromptTemplate.includes('}')) {
+    const variables = humanPromptTemplate.match(/{([^}]+)}/g);
+    if (variables) {
+      logDebug(`Найдены переменные в шаблоне: ${variables.join(', ')}`);
+    }
+  }
   
   return ChatPromptTemplate.fromMessages([
     ['system', systemPrompt],

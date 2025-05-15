@@ -54,7 +54,7 @@ Make sure your JSON is properly formatted with quotes around property names.`;
  */
 const HUMAN_PROMPT_TEMPLATE = `User query: {query}
 
-Please analyze this query.`;
+Please analyze this query and return a properly formatted JSON response.`;
 
 /**
  * Analyzes a user query to understand intent and required data sources
@@ -73,6 +73,8 @@ export const analyzeQuery = async (query: string): Promise<PerceptionResult> => 
   
   try {
     logDebug('Вызов модели для анализа запроса');
+    
+    // Передаем запрос как объект с переменными
     const result = await chain.invoke({ query }) as PerceptionOutput;
     
     logInfo(`Запрос успешно проанализирован. Намерение: "${result.intent}", уверенность: ${result.confidence}`);
