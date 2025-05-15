@@ -1,6 +1,8 @@
 import dotenv from 'dotenv';
 import { startServer } from './server';
 import { setupDatabaseConnections } from '@execution/database';
+import { databaseKnowledge } from '@common/knowledge';
+import path from 'path';
 
 // Load environment variables
 dotenv.config();
@@ -8,6 +10,10 @@ dotenv.config();
 // Initialize the application
 const initApp = async (): Promise<void> => {
   try {
+    // Load database descriptions
+    const knowledgeFilePath = path.join(__dirname, '../data/database-descriptions.json');
+    await databaseKnowledge.loadFromFile(knowledgeFilePath);
+    
     // Set up database connections
     await setupDatabaseConnections();
     

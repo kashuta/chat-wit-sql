@@ -1,0 +1,23 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/affiliate-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL_AFFILIATE")
+}
+
+model User {
+  userId       Int           @id @unique
+  UserAlanbase UserAlanbase?
+}
+
+model UserAlanbase {
+  userId     Int     @id @unique
+  clickId    String  @unique
+  partnerId  String?
+  creativeId String?
+  offerId    String?
+  User       User    @relation(fields: [userId], references: [userId])
+}

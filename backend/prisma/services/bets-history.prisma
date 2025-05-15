@@ -1,4 +1,3 @@
-// Bets History service schema
 generator client {
   provider = "prisma-client-js"
   output   = "../../node_modules/.prisma/bets-history-client"
@@ -9,50 +8,125 @@ datasource db {
   url      = env("DATABASE_URL_BETS_HISTORY")
 }
 
-// User reference model
-model User {
-  id        Int         @id @default(autoincrement())
-  uuid      String      @unique
-  username  String
-  casinoBets CasinoBet[]
-  sportsBets SportsBet[]
-  
-  @@map("users")
-}
-
-// Casino bet model
 model CasinoBet {
-  id           Int      @id @default(autoincrement())
-  userId       Int      @map("user_id")
-  gameType     String   @map("game_type")
-  betAmount    Decimal  @map("bet_amount")
-  winAmount    Decimal? @map("win_amount")
-  currency     String
-  gameId       String   @map("game_id")
-  roundId      String?  @map("round_id")
-  status       String   // PENDING, SETTLED, CANCELED, etc.
-  createdAt    DateTime @default(now()) @map("created_at")
-  settledAt    DateTime? @map("settled_at")
-  user         User     @relation(fields: [userId], references: [id])
-  
-  @@map("casino_bets")
+  id                 Int       @id @default(autoincrement())
+  userId             Int
+  gameId             Int?
+  roundId            String?   @unique
+  currencyId         String
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime
+  betAmount          Int
+  winAmount          Int?
+  status             String
+  finishedAt         DateTime?
+  bonusBalanceAfter  Int?
+  bonusBalanceBefore Int       @default(0)
+  bonusId            Int?      @default(0)
+  realBalanceAfter   Int?
+  realBalanceBefore  Int       @default(0)
+  campaignId         String?
+  finishedBy         String?
+  txIds              String[]
+  bonusProductType   String[]
 }
 
-// Sports bet model
-model SportsBet {
-  id           Int      @id @default(autoincrement())
-  userId       Int      @map("user_id")
-  eventId      String   @map("event_id")
-  marketType   String   @map("market_type")
-  selectionId  String   @map("selection_id")
-  odds         Decimal
-  betAmount    Decimal  @map("bet_amount")
-  potentialWin Decimal  @map("potential_win")
-  currency     String
-  status       String   // OPEN, WON, LOST, CANCELED, etc.
-  createdAt    DateTime @default(now()) @map("created_at")
-  settledAt    DateTime? @map("settled_at")
-  user         User     @relation(fields: [userId], references: [id])
-  
-  @@map("sports_bets")
-} 
+model CasinoGame {
+  id               Int       @id @default(autoincrement())
+  gameId           Int       @unique
+  slug             String
+  name             String
+  type             String?
+  provider         String
+  aggregator       String?
+  providerEnabled  Boolean   @default(true)
+  enabled          Boolean   @default(false)
+  archived         Boolean?  @default(false)
+  publicationStart DateTime?
+  publicationEnd   DateTime?
+  createdAt        DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime  @db.Timestamptz(3)
+
+  @@index([gameId])
+}
+
+model CasinoTransaction {
+  id                 Int      @id @default(autoincrement())
+  userId             Int
+  txId               String
+  currencyId         String
+  betAmount          Int
+  winAmount          Int
+  date               String
+  time               String
+  result             String
+  description        String
+  type               String
+  betId              Int?
+  bonusBalanceAfter  Int      @default(0)
+  bonusBalanceBefore Int      @default(0)
+  bonusId            Int?     @default(0)
+  realBalanceAfter   Int      @default(0)
+  realBalanceBefore  Int      @default(0)
+  campaignId         String?
+  betTxId            String?
+  originalTxId       String?
+  refundedRound      Boolean?
+  roundClosed        Boolean?
+  amount             Int      @default(0)
+  bonusProductType   String[]
+
+  @@index([betId])
+}
+
+model SportBet {
+  id             Int       @id @default(autoincrement())
+  userId         Int
+  orderNumber    String    @unique
+  currencyId     String
+  betAmount      Int
+  winAmount      Int?
+  playerProfit   Int?
+  betType        Int
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime
+  settlementTime DateTime?
+  status         Int       @default(0)
+  systemIndex    Int?
+}
+
+model SportBetEvent {
+  id         Int    @id @default(autoincrement())
+  sportBetId Int
+  stakeId    String
+  type       String
+  name       String
+  odds       Float
+  sport      String
+  eventScore String
+  score      String
+  market     String
+  outcome    String
+  period     String
+  startDate  String
+  result     Int
+
+  @@index([sportBetId])
+}
+
+model SportTransaction {
+  id          Int     @id @default(autoincrement())
+  userId      Int
+  txId        String
+  currencyId  String
+  betAmount   Int     @default(0)
+  winAmount   Int?
+  factor      Float?
+  date        String
+  time        String
+  result      String?
+  description String?
+  orderNumber String  @default("0")
+
+  @@index([orderNumber])
+}

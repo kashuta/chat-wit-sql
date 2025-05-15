@@ -1,0 +1,114 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/pam-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL_PAM")
+}
+
+model Blacklist {
+  id         Int      @id @default(autoincrement())
+  type       String
+  value      String
+  comment    String?
+  externalId String   @unique
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @default(now())
+}
+
+model Confirmation {
+  identifier String
+  code       String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @default(now())
+  used       Boolean  @default(false)
+  id         Int      @id @default(autoincrement())
+  operation  String   @default("registration")
+
+  @@index([identifier])
+  @@index([identifier, operation, createdAt])
+}
+
+model Favorites {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  gameId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  @@unique([userId, gameId])
+  @@index([userId])
+}
+
+model OtpSendLog {
+  id         Int      @id @default(autoincrement())
+  userId     Int?
+  actionType String
+  identifier String
+  sentAt     DateTime @default(now())
+
+  @@index([identifier, actionType, sentAt])
+  @@index([userId, actionType, sentAt])
+}
+
+model User {
+  id             Int       @id @default(autoincrement())
+  email          String?   @unique
+  phone          String?   @unique
+  userName       String?
+  firstName      String?
+  lastName       String?
+  middleName     String?
+  currencyId     String?
+  gender         String?
+  birthdate      DateTime?
+  isFake         Boolean?  @default(false)
+  password       String?
+  salt           String?
+  phoneConfirmed Boolean?  @default(false)
+  emailConfirmed Boolean?  @default(false)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @default(now())
+  kycStatus      String?
+  isBlocked      Boolean?  @default(false)
+  blockEndDate   DateTime?
+
+  @@index([userName])
+}
+
+model UserDevice {
+  id            Int      @id @default(autoincrement())
+  userId        Int?
+  deviceId      String   @unique
+  deviceInfo    Json
+  refreshSecret String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime
+
+  @@index([userId])
+}
+
+model UserSettings {
+  userId                  Int      @unique
+  casinoMaxLimit          Int?
+  casinoIsBlocked         Boolean? @default(false)
+  sportMaxLimit           Int?
+  sportIsBlocked          Boolean? @default(false)
+  createdAt               DateTime @default(now())
+  id                      Int      @id @default(autoincrement())
+  updatedAt               DateTime @default(now())
+  verificationIsBlocked   Boolean? @default(false)
+  needKycBeforeWithdrawal Boolean? @default(false)
+}
+
+model Whitelist {
+  id         Int      @id @default(autoincrement())
+  type       String
+  value      String
+  comment    String?
+  externalId String   @unique
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @default(now())
+}

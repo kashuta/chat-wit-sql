@@ -1,4 +1,3 @@
-// Financial History service schema
 generator client {
   provider = "prisma-client-js"
   output   = "../../node_modules/.prisma/financial-history-client"
@@ -9,52 +8,67 @@ datasource db {
   url      = env("DATABASE_URL_FINANCIAL_HISTORY")
 }
 
-// User reference model
+model FinancialTransaction {
+  id            Int       @id @default(autoincrement())
+  paymentTxId   String?   @unique
+  walletTxId    Int?      @unique
+  withdrawalId  Int?      @unique
+  userId        Int
+  type          FinType
+  status        String
+  amount        Int
+  paymentMethod String
+  campaignId    String?
+  currency      String?
+  createdAt     DateTime  @db.Timestamptz(3)
+  updatedAt     DateTime  @db.Timestamptz(3)
+  finishedAt    DateTime? @db.Timestamptz(3)
+  externalId    String?
+  paymentSystem String?
+  providerName  String?
+}
+
+model StatusRule {
+  id                 Int      @id @default(autoincrement())
+  minDepositCount    Int?
+  minDepositSum      Int?
+  depositLogic       Logic?   @default(OR)
+  minWithdrawalCount Int?
+  minWithdrawalSum   Int?
+  withdrawalLogic    Logic?   @default(OR)
+  createdAt          DateTime @default(now()) @db.Timestamptz(3)
+}
+
 model User {
-  id                Int               @id @default(autoincrement())
-  uuid              String            @unique
-  username          String
-  financialRecords  FinancialRecord[]
-  bonuses           Bonus[]
-  
-  @@map("users")
+  id                    Int        @id @default(autoincrement())
+  userId                Int        @unique
+  depositCount          Int?       @default(0)
+  depositSum            Int?       @default(0)
+  withdrawalCount       Int?       @default(0)
+  withdrawalSum         Int?       @default(0)
+  isManualTrustedStatus Boolean    @default(false)
+  trustedStatus         UserStatus @default(FTD)
+  hasRefund             Boolean    @default(false)
+  refundCount           Int        @default(0)
 }
 
-// Financial Record model
-model FinancialRecord {
-  id                Int      @id @default(autoincrement())
-  userId            Int      @map("user_id")
-  transactionId     String?  @map("transaction_id")
-  amount            Decimal
-  currency          String
-  recordType        String   @map("record_type") // DEPOSIT, WITHDRAWAL, BET, WIN, BONUS, etc.
-  source            String   // WALLET, CASINO, SPORTS, BONUS, etc.
-  status            String   // PENDING, COMPLETED, FAILED, etc.
-  reference         String?  // External reference or ID
-  description       String?
-  createdAt         DateTime @default(now()) @map("created_at")
-  processedAt       DateTime? @map("processed_at")
-  user              User     @relation(fields: [userId], references: [id])
-  
-  @@map("financial_records")
+enum FinType {
+  DEPOSIT
+  WITHDRAWAL
+  BONUS
+  ADJUSTMENT
+  GIFT
+  PROMO_WIN
+  CHARGE
+  ROLLBACK
 }
 
-// Bonus model
-model Bonus {
-  id                Int      @id @default(autoincrement())
-  userId            Int      @map("user_id")
-  bonusCode         String?  @map("bonus_code")
-  bonusType         String   @map("bonus_type") // DEPOSIT, CASHBACK, FREE_BET, etc.
-  amount            Decimal
-  currency          String
-  status            String   // ACTIVE, USED, EXPIRED, etc.
-  validFrom         DateTime @map("valid_from")
-  validTo           DateTime @map("valid_to")
-  wagered           Decimal  @default(0)
-  wagerRequirement  Decimal  @map("wager_requirement")
-  createdAt         DateTime @default(now()) @map("created_at")
-  usedAt            DateTime? @map("used_at")
-  user              User     @relation(fields: [userId], references: [id])
-  
-  @@map("bonuses")
-} 
+enum Logic {
+  OR
+  AND
+}
+
+enum UserStatus {
+  FTD
+  TRUSTED
+}

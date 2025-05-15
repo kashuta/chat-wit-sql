@@ -1,0 +1,86 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/casino-st8-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL_CASINO_ST8")
+}
+
+model Game {
+  id         Int      @id @default(autoincrement())
+  gameCode   String   @unique
+  type       String?
+  provider   String
+  aggregator String?
+  enabled    Boolean  @default(false)
+  archived   Boolean? @default(false)
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @db.Timestamptz(3)
+  gameId     Int      @unique @default(autoincrement())
+
+  @@index([gameCode])
+}
+
+model GameSession {
+  id        String   @id
+  token     String   @unique
+  playerId  String
+  gameCode  String
+  currency  String
+  status    String
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([playerId])
+  @@index([token], type: Hash)
+}
+
+model PlayerProfile {
+  id           Int      @id
+  playerId     String   @unique
+  currency     String
+  country      String
+  jurisdiction String
+  betLimits    String?
+  isBlocked    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime
+
+  @@index([playerId], type: Hash)
+}
+
+model St8RequestResponseLog {
+  requestId         Int     @id @default(autoincrement())
+  endpoint          String
+  requestTimestamp  String?
+  responseTimestamp String?
+  statusCode        Int?
+  requestParameters Json?
+  responseData      Json?
+  requestResponse   Json?
+
+  @@index([endpoint])
+  @@index([requestId])
+}
+
+model Transaction {
+  transactionId String   @unique
+  playerId      String
+  type          String
+  amount        Int
+  currency      String
+  status        String
+  roundId       String?
+  providerKind  String?
+  balanceAfter  Int
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime
+  isWin         Boolean  @default(false)
+  id            Int      @id @default(autoincrement())
+  walletIds     Int[]    @default([])
+  roundClosed   Boolean  @default(false)
+
+  @@index([playerId])
+}

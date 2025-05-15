@@ -1,0 +1,133 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/optimove-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL_OPTIMOVE")
+}
+
+model Bonus_Transactions {
+  bonus_id                    String    @id
+  player_id                   String
+  bonus_transaction_date      DateTime
+  bonus_transaction_timestamp DateTime?
+  bonus_transaction_status    String
+  bonus_amount                Decimal?  @db.Decimal(10, 2)
+  bonus_expiration_date       DateTime?
+}
+
+model Bonuses {
+  bonus_id                 String   @id
+  bonus_name               String?
+  bonus_type               String?
+  product                  String?
+  bonus_category           String?
+  bonus_activity           String?
+  bonus_amount             Decimal? @db.Decimal(10, 2)
+  bonus_percentage         Decimal? @db.Decimal(10, 2)
+  maximum_bonus_win_amount Decimal? @db.Decimal(10, 2)
+  bonus_wager              Decimal? @db.Decimal(10, 2)
+}
+
+model Customers {
+  player_id                 Int       @id
+  registration_date         DateTime
+  email                     String?
+  date_of_birth             DateTime? @db.Date
+  first_deposit_date        DateTime?
+  is_self_excluded          String?
+  allow_email               String?
+  allow_sms                 String?
+  allow_push                String?
+  has_phone                 String?
+  has_email                 String?
+  is_email_verified         String?
+  is_phone_verified         String?
+  verification_status       String?
+  verification_date         DateTime?
+  is_ftd                    String?
+  ftd_datetime              DateTime?
+  is_test                   String?
+  country_registration      String?
+  country_kyc               String?
+  phone_mask_code           Int?
+  phone_mask_country        String?
+  balance                   Decimal?  @db.Decimal(10, 2)
+  balance_bonus             Decimal?  @db.Decimal(10, 2)
+  balance_total             Decimal?  @db.Decimal(10, 2)
+  available_to_withdrawal   Decimal?  @db.Decimal(10, 2)
+  casino_name               String?
+  site_geo                  String?
+  currency                  String?
+  utm_source                String?
+  utm_medium                String?
+  utm_campaign              String?
+  registered_platform       String?
+  allow_whatsapp            String?
+  last_updated              DateTime?
+  is_optin_email_time_stamp DateTime?
+  deposit_count             Int?
+  deposit_amount            Decimal?  @db.Decimal(10, 2)
+  last_deposit_date         DateTime?
+  last_bet_date             DateTime?
+  is_blocked                String?
+  is_sms_verified           String?
+  is_optin                  String?
+}
+
+model Game_Types_and_Categories {
+  game_id       String    @id
+  game_name     String?
+  game_category String?
+  update_at     DateTime?
+}
+
+model Games {
+  game_date            DateTime
+  player_id            String
+  game_id              String
+  platform             String
+  real_bet_amount      Decimal  @db.Decimal(10, 2)
+  real_win_amount      Decimal? @db.Decimal(10, 2)
+  bonus_bet_amount     Decimal? @db.Decimal(10, 2)
+  bonus_win_amount     Decimal? @db.Decimal(10, 2)
+  net_gaming_revenue   Decimal  @db.Decimal(10, 2)
+  number_of_real_bets  Int?
+  number_of_bonus_bets Int?
+  number_of_sessions   Int?
+  number_of_real_wins  Int?
+  number_of_bonus_wins Int?
+
+  @@id([game_date, player_id, game_id, platform])
+}
+
+model OptimoveApiLog {
+  id                Int       @id @default(autoincrement())
+  endpoint          String
+  requestTimestamp  DateTime  @default(now())
+  responseTimestamp DateTime?
+  statusCode        Int?
+  requestParameters Json?
+  responseData      Json?
+  durationMs        Int?
+  error             String?
+  createdAt         DateTime  @default(now())
+
+  @@index([endpoint])
+  @@index([requestTimestamp])
+}
+
+model Transactions {
+  transaction_id        String    @id
+  player_id             String
+  transaction_date      DateTime
+  transaction_timestamp DateTime?
+  transaction_type      String
+  transaction_method    String?
+  transaction_amount    Decimal?  @db.Decimal(10, 2)
+  platform              String?
+  status                String
+  last_updated          DateTime?
+}

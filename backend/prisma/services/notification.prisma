@@ -1,0 +1,44 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/notification-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL_NOTIFICATION")
+}
+
+model NotificationSettings {
+  id            Int      @id @default(autoincrement())
+  userId        Int      @unique
+  allDisabled   Boolean
+  emailDisabled Boolean
+  smsDisabled   Boolean
+  pushDisabled  Boolean
+  callDisabled  Boolean
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime
+}
+
+model notifications {
+  id        Int                 @id @default(autoincrement())
+  userId    Int
+  channel   NotificationChannel
+  status    NotificationStatus
+  message   Json
+  createdAt DateTime            @default(now())
+  updatedAt DateTime
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  PUSH
+}
+
+enum NotificationStatus {
+  SENT
+  NOT_SENT
+  PENDING
+  SENT_FAKE
+}
