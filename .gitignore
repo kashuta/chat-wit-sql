@@ -49,3 +49,7 @@ coverage/
 .temp
 .cache
 .cursor/
+
+# Project specific
+tasks.md
+PRD.md

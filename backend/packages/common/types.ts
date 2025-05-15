@@ -70,6 +70,7 @@ export enum ErrorType {
 export interface PerceptionResult {
   intent: string;
   confidence: number;
-  entities: Record<string, unknown>;
+  entities: Record<string, unknown> | null;
   requiredServices: DatabaseService[];
+  sqlQuery?: string | null;
 } 

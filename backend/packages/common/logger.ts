@@ -1,6 +1,8 @@
 /**
- * Модуль логирования с поддержкой вывода на русском языке
+ * Модуль логирования с поддержкой вывода на русском языке и записи в файл
  */
+import fs from 'fs';
+import path from 'path';
 
 enum LogLevel {
   ERROR = 0,
@@ -15,6 +17,27 @@ const LOG_COLORS = {
   INFO: '\x1b[36m',  // Голубой
   DEBUG: '\x1b[90m', // Серый
   RESET: '\x1b[0m',  // Сброс цвета
+};
+
+// Папка для хранения логов
+const LOG_DIR = path.join(process.cwd(), 'logs');
+
+// Создаем директорию для логов, если она не существует
+try {
+  if (!fs.existsSync(LOG_DIR)) {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+  }
+} catch (error) {
+  console.error('Не удалось создать директорию для логов:', error);
+}
+
+// Пути к файлам логов
+const LOG_FILES = {
+  ERROR: path.join(LOG_DIR, 'error.log'),
+  WARN: path.join(LOG_DIR, 'warn.log'),
+  INFO: path.join(LOG_DIR, 'info.log'),
+  DEBUG: path.join(LOG_DIR, 'debug.log'),
+  ALL: path.join(LOG_DIR, 'all.log'),
 };
 
 // Получение текущего уровня логирования из переменных окружения
@@ -33,6 +56,64 @@ const getCurrentLogLevel = (): LogLevel => {
 // Проверка, включено ли логирование на русском языке
 const isRussianLoggingEnabled = (): boolean => {
   return process.env.ENABLE_RUSSIAN_LOGS === 'true';
+};
+
+// Проверка, включена ли запись логов в файл
+const isFileLoggingEnabled = (): boolean => {
+  return process.env.ENABLE_FILE_LOGS !== 'false'; // По умолчанию включено
+};
+
+/**
+ * Запись сообщения в файл лога
+ * @param message - Сообщение для записи
+ * @param level - Уровень логирования
+ * @param extra - Дополнительные данные
+ */
+const writeToLogFile = (message: string, level: LogLevel, extra?: any): void => {
+  if (!isFileLoggingEnabled()) return;
+  
+  const timestamp = new Date().toISOString();
+  let levelName: string;
+  let logFile: string;
+  
+  switch (level) {
+    case LogLevel.ERROR:
+      levelName = 'ERROR';
+      logFile = LOG_FILES.ERROR;
+      break;
+    case LogLevel.WARN:
+      levelName = 'WARN';
+      logFile = LOG_FILES.WARN;
+      break;
+    case LogLevel.INFO:
+      levelName = 'INFO';
+      logFile = LOG_FILES.INFO;
+      break;
+    case LogLevel.DEBUG:
+      levelName = 'DEBUG';
+      logFile = LOG_FILES.DEBUG;
+      break;
+    default:
+      levelName = 'UNKNOWN';
+      logFile = LOG_FILES.ALL;
+      break;
+  }
+  
+  const logEntry = `[${timestamp}] [${levelName}] ${message}${extra ? '\n' + JSON.stringify(extra, null, 2) : ''}\n`;
+  
+  // Запись в файл конкретного уровня логирования
+  try {
+    fs.appendFileSync(logFile, logEntry);
+  } catch (error) {
+    console.error(`Не удалось записать в файл лога ${logFile}:`, error);
+  }
+  
+  // Дублирование в общий файл логов
+  try {
+    fs.appendFileSync(LOG_FILES.ALL, logEntry);
+  } catch (error) {
+    console.error(`Не удалось записать в общий файл лога:`, error);
+  }
 };
 
 /**
@@ -87,6 +168,9 @@ const log = (message: string, level: LogLevel, extra?: any): void => {
       if (extra) console.log(extra);
       break;
   }
+  
+  // Запись в файл
+  writeToLogFile(message, level, extra);
 };
 
 /**
@@ -97,6 +181,7 @@ const log = (message: string, level: LogLevel, extra?: any): void => {
 export const logError = (message: string, error?: any): void => {
   if (!isRussianLoggingEnabled()) {
     console.error(`[ERROR] ${message}`, error || '');
+    writeToLogFile(message, LogLevel.ERROR, error);
     return;
   }
   
@@ -111,6 +196,7 @@ export const logError = (message: string, error?: any): void => {
 export const logWarn = (message: string, extra?: any): void => {
   if (!isRussianLoggingEnabled()) {
     console.warn(`[WARN] ${message}`, extra || '');
+    writeToLogFile(message, LogLevel.WARN, extra);
     return;
   }
   
@@ -125,6 +211,7 @@ export const logWarn = (message: string, extra?: any): void => {
 export const logInfo = (message: string, extra?: any): void => {
   if (!isRussianLoggingEnabled()) {
     console.log(`[INFO] ${message}`, extra || '');
+    writeToLogFile(message, LogLevel.INFO, extra);
     return;
   }
   
@@ -139,6 +226,7 @@ export const logInfo = (message: string, extra?: any): void => {
 export const logDebug = (message: string, extra?: any): void => {
   if (!isRussianLoggingEnabled()) {
     console.log(`[DEBUG] ${message}`, extra || '');
+    writeToLogFile(message, LogLevel.DEBUG, extra);
     return;
   }
   

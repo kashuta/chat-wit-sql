@@ -1,5 +1,5 @@
 import { ChatOpenAI } from '@langchain/openai';
-import { ChatPromptTemplate } from '@langchain/core/prompts';
+import { ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate } from '@langchain/core/prompts';
 import { StructuredOutputParser } from 'langchain/output_parsers';
 import { z } from 'zod';
 import { logDebug, logError, logInfo } from './logger';
@@ -54,15 +54,42 @@ export const createChatPrompt = (
   logDebug(`Системный промпт (первые 100 символов): ${systemPrompt.substring(0, 100)}...`);
   
   // Проверка наличия выражений внутри фигурных скобок в шаблоне
-  if (humanPromptTemplate.includes('{') && humanPromptTemplate.includes('}')) {
-    const variables = humanPromptTemplate.match(/{([^}]+)}/g);
-    if (variables) {
-      logDebug(`Найдены переменные в шаблоне: ${variables.join(', ')}`);
+  const variableMatches = humanPromptTemplate.match(/{([^}]+)}/g);
+  const inputVariables: string[] = [];
+  
+  if (variableMatches) {
+    // Extract variable names without the braces
+    for (const match of variableMatches) {
+      const varName = match.slice(1, -1).trim();
+      inputVariables.push(varName);
+      logDebug(`Найдена переменная в шаблоне: ${varName}`);
     }
   }
   
-  return ChatPromptTemplate.fromMessages([
-    ['system', systemPrompt],
-    ['human', humanPromptTemplate],
-  ]);
+  try {
+    // Создаем шаблоны сообщений
+    const systemMessagePrompt = SystemMessagePromptTemplate.fromTemplate(systemPrompt);
+    const humanMessagePrompt = HumanMessagePromptTemplate.fromTemplate(humanPromptTemplate);
+    
+    // Explicitly define the input variables to avoid errors
+    logDebug(`Создание шаблона чата с переменными: ${inputVariables.join(', ') || 'нет переменных'}`);
+    const chatPrompt = ChatPromptTemplate.fromMessages([
+      systemMessagePrompt,
+      humanMessagePrompt,
+    ]);
+    
+    return chatPrompt;
+  } catch (error) {
+    logError('Ошибка при создании шаблона промпта:', error);
+    if (error instanceof Error) {
+      logError(`Сообщение ошибки: ${error.message}`);
+      if (error.stack) {
+        logDebug(`Стек ошибки: ${error.stack}`);
+      }
+    }
+    
+    // Creating a simple fallback template
+    logDebug('Создание простого резервного шаблона');
+    return ChatPromptTemplate.fromTemplate(`${systemPrompt}\n\n${humanPromptTemplate}`);
+  }
 }; 

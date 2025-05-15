@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { QueryPlan, DatabaseService, PerceptionResult } from '@common/types';
-import { getOpenAIModel, createOutputParser, createChatPrompt } from '@common/llm';
+import { getOpenAIModel, createOutputParser } from '@common/llm';
 
 /**
  * Schema for query plan output validation
@@ -42,18 +42,20 @@ Respond with:
 - steps: Array of steps to execute
 - requiredServices: Array of database services needed (should match the services in steps)
 
-You MUST only use the available database services listed above.`;
+You MUST only use the available database services listed above.
 
-/**
- * Human prompt template for the planning module
- */
-const HUMAN_PROMPT_TEMPLATE = `User query: {query}
-
-Intent analysis: {intent}
-Required services from perception: {requiredServices}
-Extracted entities: {entities}
-
-Please create a plan to answer this query.`;
+IMPORTANT: You must respond with a valid JSON object. Your response must be ONLY valid JSON without any text before or after it.
+Example response format:
+{
+  "steps": [
+    {
+      "service": "financial-history",
+      "description": "Count deposits made in the last week",
+      "sqlQuery": "SELECT COUNT(*) FROM deposits WHERE deposit_date >= NOW() - INTERVAL '7 days'"
+    }
+  ],
+  "requiredServices": ["financial-history"]
+}`;
 
 /**
  * Creates a query plan based on the perception result
@@ -67,21 +69,42 @@ export const createQueryPlan = async (
 ): Promise<QueryPlan> => {
   const model = getOpenAIModel();
   const parser = createOutputParser(queryPlanSchema);
-  const prompt = createChatPrompt(SYSTEM_PROMPT, HUMAN_PROMPT_TEMPLATE);
-  
-  const chain = prompt.pipe(model).pipe(parser);
   
   try {
     const { intent, entities, requiredServices } = perceptionResult;
     const entitiesStr = JSON.stringify(entities);
     const servicesStr = JSON.stringify(requiredServices);
     
-    const result = await chain.invoke({
-      query,
-      intent,
-      requiredServices: servicesStr,
-      entities: entitiesStr,
-    }) as PlanningOutput;
+    // Системное сообщение
+    const systemMessage = {
+      role: 'system',
+      content: SYSTEM_PROMPT
+    };
+    
+    // Пользовательское сообщение
+    const userMessage = {
+      role: 'user',
+      content: `User query: ${query}
+
+Intent analysis: ${intent}
+Required services from perception: ${servicesStr}
+Extracted entities: ${entitiesStr}
+
+Please create a plan to answer this query.`
+    };
+    
+    // Формируем сообщения для модели
+    const messages = [systemMessage, userMessage];
+    
+    const response = await model.invoke(messages);
+    
+    if (typeof response.content !== 'string') {
+      throw new Error('LLM response content is not a string');
+    }
+    
+    console.log(`Raw planning response: ${response.content}`);
+    
+    const result = await parser.parse(response.content) as PlanningOutput;
 
     return {
       steps: result.steps.map(step => ({
@@ -95,10 +118,33 @@ export const createQueryPlan = async (
     console.error('Error in planning module:', error);
     // Return a fallback plan with basic information retrieval
     return {
-      steps: perceptionResult.requiredServices.map(service => ({
-        service,
-        description: `Retrieve basic information from ${service}`,
-      })),
+      steps: perceptionResult.requiredServices.map(service => {
+        let defaultQuery: string;
+        
+        // Дефолтные запросы для каждого сервиса
+        switch(service) {
+          case 'wallet':
+            defaultQuery = 'SELECT * FROM wallets LIMIT 10';
+            break;
+          case 'bets-history':
+            defaultQuery = 'SELECT * FROM bets LIMIT 10';
+            break;
+          case 'user-activities':
+            defaultQuery = 'SELECT * FROM activities LIMIT 10';
+            break;
+          case 'financial-history':
+            defaultQuery = 'SELECT * FROM transactions LIMIT 10';
+            break;
+          default:
+            defaultQuery = 'SELECT 1';
+        }
+        
+        return {
+          service,
+          description: `Retrieve basic information from ${service}`,
+          sqlQuery: defaultQuery
+        };
+      }),
       requiredServices: perceptionResult.requiredServices,
     };
   }

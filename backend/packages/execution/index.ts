@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { QueryPlan, QueryResponse, DatabaseService, ErrorType } from '@common/types';
 import { createTypedError } from '@common/utils';
-import { getOpenAIModel, createOutputParser, createChatPrompt } from '@common/llm';
+import { getOpenAIModel, createOutputParser } from '@common/llm';
 
 /**
  * Mock function to execute SQL queries (to be replaced with actual DB connection)
@@ -70,20 +70,15 @@ Respond with:
 - confidence: Your confidence in the interpretation (0-1)
 - visualizationType: Recommended visualization type (table, line, bar, pie)
 
-Be concise but informative, highlighting key patterns or outliers in the data.`;
+Be concise but informative, highlighting key patterns or outliers in the data.
 
-/**
- * Human prompt template for the execution module
- */
-const HUMAN_PROMPT_TEMPLATE = `User query: {query}
-
-SQL queries executed:
-{sqlQueries}
-
-Query results:
-{results}
-
-Please interpret these results.`;
+IMPORTANT: You must respond with a valid JSON object. Your response must be ONLY valid JSON without any text before or after it.
+Example response format:
+{
+  "explanation": "There were 5 deposits made last week totaling $1,200.",
+  "confidence": 0.9,
+  "visualizationType": "table"
+}`;
 
 /**
  * Executes a query plan and interprets the results
@@ -120,18 +115,42 @@ export const executeQueryPlan = async (
     // Interpret the results
     const model = getOpenAIModel();
     const parser = createOutputParser(executionResultSchema);
-    const prompt = createChatPrompt(SYSTEM_PROMPT, HUMAN_PROMPT_TEMPLATE);
-    
-    const chain = prompt.pipe(model).pipe(parser);
     
     const sqlQueriesStr = executedQueries.join('\n\n');
     const resultsStr = JSON.stringify(stepResults, null, 2);
     
-    const interpretation = await chain.invoke({
-      query,
-      sqlQueries: sqlQueriesStr,
-      results: resultsStr,
-    }) as ExecutionOutput;
+    // Системное сообщение
+    const systemMessage = {
+      role: 'system',
+      content: SYSTEM_PROMPT
+    };
+    
+    // Пользовательское сообщение
+    const userMessage = {
+      role: 'user',
+      content: `User query: ${query}
+
+SQL queries executed:
+${sqlQueriesStr}
+
+Query results:
+${resultsStr}
+
+Please interpret these results.`
+    };
+    
+    // Формируем сообщения для модели
+    const messages = [systemMessage, userMessage];
+    
+    const response = await model.invoke(messages);
+    
+    if (typeof response.content !== 'string') {
+      throw new Error('LLM response content is not a string');
+    }
+    
+    console.log(`Raw execution response: ${response.content}`);
+    
+    const interpretation = await parser.parse(response.content) as ExecutionOutput;
     
     // Return a structured response
     return {
