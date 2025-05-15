@@ -45,13 +45,26 @@ export const analyzeQuery = async (query: string): Promise<PerceptionResult> => 
       role: 'system',
       content: `You are a query analyzer for a betting platform SQL assistant.
       Analyze the user query and determine its intent, confidence, and required database services.
-      If the query is about financial transactions (deposits, withdrawals), return financial-history.
-      If the query is about bets, return bets-history.
-      If the query is about user activities, return user-activities.
-      If the query is about wallet balances, return wallet.
+      
+      AVAILABLE DATABASE SERVICES:
+      - "wallet": Contains information about user balances, deposits, withdrawals limits
+      - "bets-history": Contains information about user bets, games played, winnings, losses
+      - "user-activities": Contains user login history, session data, feature usage, preferences
+      - "financial-history": Contains financial transactions, deposits, withdrawals, bonuses, promotions
+      
+      IMPORTANT RULES FOR IDENTIFYING REQUIRED SERVICES:
+      1. Thoroughly analyze the query to identify ALL services that might contain relevant data
+      2. If the query relates to multiple topics, include ALL relevant services
+      3. If the query compares or relates data across domains, include ALL necessary services
+      4. Consider indirect relationships - e.g., "users who deposited and then placed bets" requires both financial-history AND bets-history
+      
+      Examples of multi-service queries:
+      - "Show deposits made by users who placed more than 5 bets" → ["financial-history", "bets-history"]
+      - "What's the average bet amount for users who deposited last week?" → ["bets-history", "financial-history"]
+      - "Show login times for users with large balances" → ["user-activities", "wallet"]
       
       For SQL queries, create a proper PostgreSQL query if you're confident.
-      If you can't understand the query or it's ambiguous, set low confidence.
+      If you can't understand the query or it's ambiguous, set confidence below 0.7.
       
       IMPORTANT: You must respond with a valid JSON object. Your response must be ONLY valid JSON without any text before or after it.
       
@@ -66,11 +79,13 @@ export const analyzeQuery = async (query: string): Promise<PerceptionResult> => 
         "intent": "description of user intent",
         "confidence": 0.9,
         "entities": null,
-        "requiredServices": ["financial-history"],
+        "requiredServices": ["financial-history", "bets-history"],
         "sqlQuery": "SELECT * FROM table"
       }
       
-      For example, if the query needs financial-history service, make sure requiredServices is an array like ["financial-history"], NOT just "financial-history".
+      LANGUAGE MATCHING:
+      Always respond in the same language as the user's query. If the query is in Russian, analyze in Russian.
+      If the query is in English, analyze in English.
       
       Remove any markdown code block markers in your response. Return only a valid JSON object.`
     };
@@ -100,11 +115,23 @@ export const analyzeQuery = async (query: string): Promise<PerceptionResult> => 
     const parsed = await parser.parse(result.content) as PerceptionOutput;
     logInfo(`Query analyzed with intent: ${parsed.intent}, confidence: ${parsed.confidence}`);
     
+    // Валидируем и обогащаем набор сервисов
+    const validatedServices = validateAndEnrichRequiredServices(
+      parsed.requiredServices,
+      parsed.intent,
+      query,
+      parsed.entities
+    );
+    
+    if (validatedServices.length !== parsed.requiredServices.length) {
+      logInfo(`Enhanced required services: ${JSON.stringify(validatedServices)}`);
+    }
+    
     return {
       intent: parsed.intent,
       confidence: parsed.confidence,
       entities: parsed.entities,
-      requiredServices: parsed.requiredServices as DatabaseService[],
+      requiredServices: validatedServices,
       sqlQuery: parsed.sqlQuery
     };
   } catch (error) {
@@ -123,77 +150,275 @@ export const analyzeQuery = async (query: string): Promise<PerceptionResult> => 
 };
 
 /**
+ * Validates and enriches the list of required services based on intent and query context
+ * @param services Initial list of services from LLM
+ * @param intent Query intent
+ * @param query Original user query
+ * @param entities Extracted entities
+ * @returns Enhanced list of required services
+ */
+const validateAndEnrichRequiredServices = (
+  services: DatabaseService[],
+  intent: string,
+  query: string,
+  entities: Record<string, unknown> | null
+): DatabaseService[] => {
+  // Если список пуст, вернуть хотя бы один сервис на основе простой эвристики
+  if (services.length === 0) {
+    return inferServicesFromQuery(query);
+  }
+  
+  // Преобразуем в Set для удобства работы и исключения дубликатов
+  const serviceSet = new Set(services);
+  const queryLower = query.toLowerCase();
+  const intentLower = intent.toLowerCase();
+  
+  // Проверка на ситуации, когда запрос явно охватывает несколько сервисов
+  
+  // Кейс 1: Запрос сравнивает данные из нескольких доменов
+  if (
+    (queryLower.includes('deposit') || queryLower.includes('депозит')) && 
+    (queryLower.includes('bet') || queryLower.includes('ставк'))
+  ) {
+    serviceSet.add('financial-history');
+    serviceSet.add('bets-history');
+  }
+  
+  // Кейс 2: Запрос о пользователях с определенным балансом и их активности
+  if (
+    (queryLower.includes('balanc') || queryLower.includes('баланс')) && 
+    (queryLower.includes('activ') || queryLower.includes('активност'))
+  ) {
+    serviceSet.add('wallet');
+    serviceSet.add('user-activities');
+  }
+  
+  // Кейс 3: Анализ зависимости между депозитами и логинами
+  if (
+    (queryLower.includes('deposit') || queryLower.includes('депозит')) && 
+    (queryLower.includes('login') || queryLower.includes('вход'))
+  ) {
+    serviceSet.add('financial-history');
+    serviceSet.add('user-activities');
+  }
+  
+  // Кейс 4: Запросы, связанные с транзакциями и балансом
+  if (
+    (queryLower.includes('transaction') || queryLower.includes('транзакц')) && 
+    (queryLower.includes('balanc') || queryLower.includes('баланс'))
+  ) {
+    serviceSet.add('financial-history');
+    serviceSet.add('wallet');
+  }
+  
+  // Проверки на основе намерения (intent)
+  if (intentLower.includes('compar') || intentLower.includes('сравн')) {
+    // Для сравнительных запросов проверим ключевые слова
+    if (intentLower.includes('deposit') || intentLower.includes('депозит')) {
+      serviceSet.add('financial-history');
+    }
+    if (intentLower.includes('bet') || intentLower.includes('ставк')) {
+      serviceSet.add('bets-history');
+    }
+    if (intentLower.includes('activ') || intentLower.includes('активност')) {
+      serviceSet.add('user-activities');
+    }
+    if (intentLower.includes('balanc') || intentLower.includes('баланс')) {
+      serviceSet.add('wallet');
+    }
+  }
+  
+  // Проверка сущностей
+  if (entities) {
+    if ('user_id' in entities || 'userId' in entities) {
+      // Если запрос включает конкретного пользователя, вероятно потребуются данные о его активности
+      serviceSet.add('user-activities');
+    }
+    
+    if ('timeframe' in entities || 'period' in entities) {
+      // Запросы с временными периодами часто требуют несколько источников данных
+      if (serviceSet.has('financial-history')) {
+        // Если запрос о финансах за период, может потребоваться информация о ставках
+        serviceSet.add('bets-history');
+      }
+    }
+  }
+  
+  return Array.from(serviceSet);
+};
+
+/**
+ * Infers required services based on simple query analysis when LLM fails
+ * @param query User query
+ * @returns List of inferred services
+ */
+const inferServicesFromQuery = (query: string): DatabaseService[] => {
+  const queryLower = query.toLowerCase();
+  const services: Set<DatabaseService> = new Set();
+  
+  // Проверяем ключевые слова для определения необходимых сервисов
+  if (queryLower.includes('deposit') || queryLower.includes('withdraw') || 
+      queryLower.includes('transaction') || queryLower.includes('bonus') ||
+      queryLower.includes('депозит') || queryLower.includes('вывод') ||
+      queryLower.includes('транзакц') || queryLower.includes('бонус')) {
+    services.add('financial-history');
+  }
+  
+  if (queryLower.includes('bet') || queryLower.includes('game') || 
+      queryLower.includes('win') || queryLower.includes('loss') ||
+      queryLower.includes('ставк') || queryLower.includes('игр') || 
+      queryLower.includes('выигр') || queryLower.includes('проигр')) {
+    services.add('bets-history');
+  }
+  
+  if (queryLower.includes('login') || queryLower.includes('session') || 
+      queryLower.includes('activity') || queryLower.includes('preference') ||
+      queryLower.includes('вход') || queryLower.includes('сессия') || 
+      queryLower.includes('активност') || queryLower.includes('настройк')) {
+    services.add('user-activities');
+  }
+  
+  if (queryLower.includes('balance') || queryLower.includes('wallet') || 
+      queryLower.includes('limit') || 
+      queryLower.includes('баланс') || queryLower.includes('кошелек') || 
+      queryLower.includes('лимит')) {
+    services.add('wallet');
+  }
+  
+  // Если не смогли определить ни одного сервиса, возвращаем financial-history как наиболее общий
+  if (services.size === 0) {
+    services.add('financial-history');
+  }
+  
+  return Array.from(services);
+};
+
+/**
  * Provides a fallback response when OpenAI is not available
  */
 const getFallbackResponse = (query: string): PerceptionResult => {
   // Простая эвристика для определения намерения по ключевым словам
   const queryLower = query.toLowerCase();
   
-  // Обработка запросов о депозитах
-  if (queryLower.includes('deposit') || queryLower.includes('deposits') || 
-      queryLower.includes('депозит') || queryLower.includes('пополнение')) {
+  // Анализируем запрос на наличие нескольких тем
+  const services = inferServicesFromQuery(query);
+  
+  // Определяем основное намерение на основе найденных сервисов
+  let primaryIntent = 'unknown';
+  let confidence = 0.5;
+  let entities: Record<string, unknown> | null = null;
+  let sqlQuery: string | null = null;
+  
+  // Создаем объект entities для хранения информации
+  entities = { timeframe: 'last_week' };
+  
+  // Добавляем user_id, если есть упоминание конкретного пользователя
+  if (queryLower.match(/user\s+(\d+)/i) || queryLower.match(/пользовател[ья]\s+(\d+)/i)) {
+    const userIdMatch = queryLower.match(/user\s+(\d+)/i) || queryLower.match(/пользовател[ья]\s+(\d+)/i);
+    if (userIdMatch && userIdMatch[1]) {
+      entities.userId = parseInt(userIdMatch[1], 10);
+    }
+  }
+  
+  // Определяем намерение и SQL-запрос на основе комбинации сервисов
+  if (services.includes('financial-history') && services.includes('bets-history')) {
+    // Комбинированный запрос о депозитах и ставках
+    logInfo('Fallback: Detected combined deposit and bet query');
+    primaryIntent = 'get_deposit_and_bet_info';
+    confidence = 0.6;
+    sqlQuery = `-- Запрос к financial-history
+                SELECT u.user_id, COUNT(t.id) as deposit_count, SUM(t.amount) as total_deposits
+                FROM transactions t
+                JOIN users u ON t.user_id = u.id
+                WHERE t.type = 'deposit' 
+                AND t.created_at >= NOW() - INTERVAL '7 days'
+                GROUP BY u.user_id;
+                
+                -- Запрос к bets-history
+                SELECT u.user_id, COUNT(b.id) as bet_count, SUM(b.amount) as total_bets
+                FROM bets b
+                JOIN users u ON b.user_id = u.id
+                WHERE b.created_at >= NOW() - INTERVAL '7 days'
+                GROUP BY u.user_id;`;
+  }
+  else if (services.includes('wallet') && services.includes('user-activities')) {
+    // Комбинированный запрос о балансе и активности
+    logInfo('Fallback: Detected combined wallet and activity query');
+    primaryIntent = 'get_balance_and_activity_info';
+    confidence = 0.6;
+    sqlQuery = `-- Запрос к wallet
+                SELECT w.user_id, w.current_balance, w.currency
+                FROM wallets w
+                WHERE w.current_balance > 0;
+                
+                -- Запрос к user-activities
+                SELECT a.user_id, COUNT(a.id) as login_count, MAX(a.login_at) as last_login
+                FROM user_sessions a
+                WHERE a.login_at >= NOW() - INTERVAL '7 days'
+                GROUP BY a.user_id;`;
+  }
+  else if (services.includes('financial-history') && services.includes('user-activities')) {
+    // Комбинированный запрос о транзакциях и активности
+    logInfo('Fallback: Detected combined transaction and activity query');
+    primaryIntent = 'get_transaction_and_activity_info';
+    confidence = 0.6;
+    sqlQuery = `-- Запрос к financial-history
+                SELECT t.user_id, COUNT(t.id) as transaction_count, SUM(t.amount) as total_amount
+                FROM transactions t
+                WHERE t.created_at >= NOW() - INTERVAL '7 days'
+                GROUP BY t.user_id;
+                
+                -- Запрос к user-activities
+                SELECT a.user_id, COUNT(a.id) as login_count
+                FROM user_sessions a
+                WHERE a.login_at >= NOW() - INTERVAL '7 days'
+                GROUP BY a.user_id;`;
+  }
+  // Одиночные сервисы (предыдущая логика)
+  else if (services.includes('financial-history')) {
     logInfo('Fallback: Detected deposit-related query');
-    return {
-      intent: 'get_deposit_info',
-      confidence: 0.7,
-      entities: { timeframe: 'last_week' },
-      requiredServices: ['financial-history'],
-      sqlQuery: `SELECT COUNT(*) as deposit_count, SUM(amount) as total_amount 
+    primaryIntent = 'get_deposit_info';
+    confidence = 0.7;
+    sqlQuery = `SELECT COUNT(*) as deposit_count, SUM(amount) as total_amount 
                 FROM transactions 
                 WHERE type = 'deposit' 
-                AND created_at >= NOW() - INTERVAL '7 days'`
-    };
+                AND created_at >= NOW() - INTERVAL '7 days'`;
   }
-  
-  // Обработка запросов о ставках
-  if (queryLower.includes('bet') || queryLower.includes('bets') || 
-      queryLower.includes('ставка') || queryLower.includes('ставки')) {
+  else if (services.includes('bets-history')) {
     logInfo('Fallback: Detected bet-related query');
-    return {
-      intent: 'get_bet_history',
-      confidence: 0.7,
-      entities: { timeframe: 'last_week' },
-      requiredServices: ['bets-history'],
-      sqlQuery: `SELECT COUNT(*) as bet_count, SUM(amount) as total_amount 
+    primaryIntent = 'get_bet_history';
+    confidence = 0.7;
+    sqlQuery = `SELECT COUNT(*) as bet_count, SUM(amount) as total_amount 
                 FROM bets 
-                WHERE created_at >= NOW() - INTERVAL '7 days'`
-    };
+                WHERE created_at >= NOW() - INTERVAL '7 days'`;
   }
-  
-  // Обработка запросов о балансе
-  if (queryLower.includes('balance') || queryLower.includes('wallet') || 
-      queryLower.includes('баланс') || queryLower.includes('кошелек')) {
+  else if (services.includes('wallet')) {
     logInfo('Fallback: Detected wallet-related query');
-    return {
-      intent: 'get_wallet_balance',
-      confidence: 0.7,
-      entities: null,
-      requiredServices: ['wallet'],
-      sqlQuery: `SELECT current_balance FROM wallets WHERE user_id = :userId`
-    };
+    primaryIntent = 'get_wallet_balance';
+    confidence = 0.7;
+    sqlQuery = `SELECT current_balance FROM wallets WHERE user_id = :userId`;
   }
-  
-  // Обработка запросов о пользовательской активности
-  if (queryLower.includes('user') || queryLower.includes('activity') || 
-      queryLower.includes('пользователь') || queryLower.includes('активность')) {
+  else if (services.includes('user-activities')) {
     logInfo('Fallback: Detected user activity-related query');
-    return {
-      intent: 'get_user_activity',
-      confidence: 0.7,
-      entities: { timeframe: 'last_week' },
-      requiredServices: ['user-activities'],
-      sqlQuery: `SELECT COUNT(*) as login_count FROM user_sessions 
-                WHERE login_at >= NOW() - INTERVAL '7 days'`
-    };
+    primaryIntent = 'get_user_activity';
+    confidence = 0.7;
+    sqlQuery = `SELECT COUNT(*) as login_count FROM user_sessions 
+                WHERE login_at >= NOW() - INTERVAL '7 days'`;
+  }
+  else {
+    // По умолчанию если не удалось определить запрос
+    logInfo('Fallback: Unable to determine query intent');
+    primaryIntent = 'unknown';
+    confidence = 0.1;
+    entities = null;
+    sqlQuery = null;
   }
   
-  // По умолчанию если не удалось определить запрос
-  logInfo('Fallback: Unable to determine query intent');
   return {
-    intent: 'unknown',
-    confidence: 0.1,
-    entities: null,
-    requiredServices: [],
-    sqlQuery: null
+    intent: primaryIntent,
+    confidence: confidence,
+    entities: entities,
+    requiredServices: services,
+    sqlQuery: sqlQuery
   };
 }; 
