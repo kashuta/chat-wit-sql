@@ -1,0 +1,105 @@
+import { z } from 'zod';
+import { QueryPlan, DatabaseService, PerceptionResult } from '@common/types';
+import { getOpenAIModel, createOutputParser, createChatPrompt } from '@common/llm';
+
+/**
+ * Schema for query plan output validation
+ */
+const queryPlanSchema = z.object({
+  steps: z.array(
+    z.object({
+      service: z.enum(['wallet', 'bets-history', 'user-activities', 'financial-history'] as const),
+      description: z.string(),
+      sqlQuery: z.string().optional(),
+    })
+  ).describe('Steps to execute to answer the query'),
+  requiredServices: z.array(
+    z.enum(['wallet', 'bets-history', 'user-activities', 'financial-history'] as const)
+  ).describe('Database services required to answer this query'),
+});
+
+// Define the output type from the zod schema
+type PlanningOutput = z.infer<typeof queryPlanSchema>;
+
+/**
+ * System prompt for the planning module
+ */
+const SYSTEM_PROMPT = `You are an AI assistant specialized in planning SQL queries for a sports betting and casino platform called Dante.
+Your task is to plan the steps needed to answer the user's query efficiently.
+
+Available database services:
+- wallet: Contains information about user balances, deposits, withdrawals
+- bets-history: Contains information about user bets, games played, winnings
+- user-activities: Contains user login history, session data, feature usage
+- financial-history: Contains financial transactions, bonuses, promotions
+
+For each service, you need to specify:
+1. Which service to query
+2. A description of what information to retrieve from that service
+3. Optionally, a draft SQL query to use (this will be refined later)
+
+Respond with:
+- steps: Array of steps to execute
+- requiredServices: Array of database services needed (should match the services in steps)
+
+You MUST only use the available database services listed above.`;
+
+/**
+ * Human prompt template for the planning module
+ */
+const HUMAN_PROMPT_TEMPLATE = `User query: {query}
+
+Intent analysis: {intent}
+Required services from perception: {requiredServices}
+Extracted entities: {entities}
+
+Please create a plan to answer this query.`;
+
+/**
+ * Creates a query plan based on the perception result
+ * @param perceptionResult - Result from the perception module
+ * @param query - Original user query
+ * @returns Query plan
+ */
+export const createQueryPlan = async (
+  perceptionResult: PerceptionResult,
+  query: string
+): Promise<QueryPlan> => {
+  const model = getOpenAIModel();
+  const parser = createOutputParser(queryPlanSchema);
+  const prompt = createChatPrompt(SYSTEM_PROMPT, HUMAN_PROMPT_TEMPLATE);
+  
+  const chain = prompt.pipe(model).pipe(parser);
+  
+  try {
+    const { intent, entities, requiredServices } = perceptionResult;
+    const entitiesStr = JSON.stringify(entities);
+    const servicesStr = JSON.stringify(requiredServices);
+    
+    const result = await chain.invoke({
+      query,
+      intent,
+      requiredServices: servicesStr,
+      entities: entitiesStr,
+    }) as PlanningOutput;
+
+    return {
+      steps: result.steps.map(step => ({
+        service: step.service as DatabaseService,
+        description: step.description,
+        sqlQuery: step.sqlQuery,
+      })),
+      requiredServices: result.requiredServices as DatabaseService[],
+    };
+  } catch (error) {
+    console.error('Error in planning module:', error);
+    // Return a fallback plan with basic information retrieval
+    return {
+      steps: perceptionResult.requiredServices.map(service => ({
+        service,
+        description: `Retrieve basic information from ${service}`,
+      })),
+      requiredServices: perceptionResult.requiredServices,
+    };
+  }
+}; 

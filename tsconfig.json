@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "esModuleInterop": true,
+    "strict": true,
+    "strictNullChecks": true,
+    "noImplicitAny": true,
+    "noImplicitThis": true,
+    "alwaysStrict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "removeComments": true,
+    "sourceMap": true,
+    "declaration": true,
+    "declarationMap": true,
+    "outDir": "./dist",
+    "rootDir": ".",
+    "baseUrl": ".",
+    "paths": {
+      "@packages/*": ["packages/*"],
+      "@common/*": ["packages/common/*"],
+      "@perception/*": ["packages/perception/*"],
+      "@planning/*": ["packages/planning/*"],
+      "@execution/*": ["packages/execution/*"]
+    }
+  },
+  "include": ["src/**/*", "packages/**/*"],
+  "exclude": ["node_modules", "dist"]
+} 
