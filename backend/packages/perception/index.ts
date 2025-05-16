@@ -43,19 +43,19 @@ export const analyzeQuery = async (query: string): Promise<PerceptionResult> => 
   logInfo(`Analyzing query: "${query}"`);
   
   try {
-    // Создаем parser с нашей схемой
+    // Create a parser with our schema
     const parser = createOutputParser(perceptionSchema);
     
-    // Проверяем наличие ключа API для OpenAI
+    // Check for OpenAI API key
     if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY.startsWith('sk-your')) {
       logWarn('OpenAI API key not set or invalid, using fallback implementation');
       return getFallbackResponse(query);
     }
     
-    // Получаем модель для запроса
+    // Get the model for the request
     const model = getOpenAIModel();
     
-    // Системное сообщение
+    // System message
     const systemMessage = {
       role: 'system',
       content: `You are a query analyzer for a betting platform SQL assistant.
@@ -78,18 +78,38 @@ export const analyzeQuery = async (query: string): Promise<PerceptionResult> => 
       - "traffic": Contains traffic tracking and analysis data
       `}
       
+      IMPORTANT SERVICE INFORMATION:
+      - 'pam' service is THE MAIN DATABASE for user information - it contains the primary "User" table with ALL registered users.
+      - ALWAYS USE "pam" service for any queries about user counts, user lists, or user information.
+      - The "User" table in the pam service is the source of truth for all user data.
+      - For financial transactions, include 'financial-history' or 'wallet' services.
+      - For betting activity, include 'bets-history' service.
+      - For user actions and sessions, include 'user-activities' service.
+      
+      IMPORTANT SQL QUERY RULES FOR POSTGRESQL:
+      1. Table names and column names provided in the schema description (from database-descriptions.json) MUST be used EXACTLY as specified. PostgreSQL can be case-sensitive. If table or column names in the schema are enclosed in double quotes (e.g., "User", "createdAt"), use them with quotes in the SQL query. If they are not quoted in the schema, use them as is, respecting their case.
+      2. When querying dates, use the EXACT column names provided in the schema (e.g., 'created_at', 'updated_at', 'registration_date'). DO NOT assume generic names like 'date' if not specified for the table. Check the schema description for the correct date column names for each table.
+      3. Capitalize SQL keywords (SELECT, FROM, WHERE, etc.) for clarity.
+      4. For interval queries use PostgreSQL syntax: NOW() - INTERVAL '7 days'.
+      5. If a table name in the schema description starts with an uppercase letter (e.g., "User"), it likely requires double quotes in PostgreSQL: SELECT * FROM "User".
+      
       IMPORTANT RULES FOR IDENTIFYING REQUIRED SERVICES:
-      1. Thoroughly analyze the query to identify ALL services that might contain relevant data
-      2. If the query relates to multiple topics, include ALL relevant services
-      3. If the query compares or relates data across domains, include ALL necessary services
-      4. Consider indirect relationships - e.g., "users who deposited and then placed bets" requires both financial-history AND bets-history
+      1. Thoroughly analyze the query to identify ALL services that might contain relevant data based on the provided database descriptions.
+      2. If the query relates to multiple topics, include ALL relevant services.
+      3. If the query compares or relates data across domains, include ALL necessary services.
+      4. Consider indirect relationships - e.g., "users who deposited and then placed bets" requires both financial-history AND bets-history.
+      5. Any query about total user count MUST use 'pam' service and target the "User" table.
       
       Examples of multi-service queries:
       - "Show deposits made by users who placed more than 5 bets" → ["financial-history", "bets-history"]
       - "What's the average bet amount for users who deposited last week?" → ["bets-history", "financial-history"]
       - "Show login times for users with large balances" → ["user-activities", "wallet"]
+      - "How many users do we have?" → ["pam"] (querying "User" table)
+      - "List all users registered last month" → ["pam"] (querying "User" table, using the correct date column for registration from the schema)
+      - "Get user count" → ["pam"]
+      - "How many total users in the system" → ["pam"]
       
-      For SQL queries, create a proper PostgreSQL query if you're confident.
+      For SQL queries, create a proper PostgreSQL query if you're confident, strictly following the table and column names from the provided schema.
       If you can't understand the query or it's ambiguous, set confidence below 0.7.
       
       IMPORTANT: You must respond with a valid JSON object. Your response must be ONLY valid JSON without any text before or after it.
@@ -102,23 +122,29 @@ export const analyzeQuery = async (query: string): Promise<PerceptionResult> => 
         "confidence": 0.9,
         "entities": null,
         "requiredServices": ["financial-history", "bets-history"],
-        "sqlQuery": "SELECT * FROM table"
+        "sqlQuery": "SELECT * FROM \"Transaction\" WHERE \"created_at\"::date = CURRENT_DATE" // Example with quoted column name if schema specifies it
       }
       
       LANGUAGE MATCHING:
       Always respond in the same language as the user's query. If the query is in Russian, analyze in Russian.
       If the query is in English, analyze in English.
       
+      IMPORTANT: USING THE USER TABLE (from 'pam' service):
+      For queries about users, use the 'pam' database and the "User" table.
+      Refer to the schema description for exact column names, especially for dates (e.g., 'created_at', 'registered_at').
+      If a query regarding user registration date fails, double-check the exact column name for user creation/registration in the "User" table schema description.
+      To check for table existence if unsure (debug only): SELECT table_name FROM information_schema.tables WHERE table_name ILIKE '%user%'
+      
       Remove any markdown code block markers in your response. Return only a valid JSON object.`
     };
     
-    // Пользовательское сообщение
+    // User message
     const userMessage = {
       role: 'user', 
       content: `USER QUERY: ${query}`
     };
     
-    // Формируем сообщения для модели
+    // Prepare messages for the model
     const messages = [systemMessage, userMessage];
     
     logDebug('Prompt created, formatting with query');
@@ -133,11 +159,11 @@ export const analyzeQuery = async (query: string): Promise<PerceptionResult> => 
     
     logDebug(`Raw LLM response: ${result.content}`);
     
-    // Парсим результат
+    // Parse the result
     const parsed = await parser.parse(result.content) as PerceptionOutput;
     logInfo(`Query analyzed with intent: ${parsed.intent}, confidence: ${parsed.confidence}`);
     
-    // Валидируем и обогащаем набор сервисов
+    // Validate and enrich the set of services
     const validatedServices = validateAndEnrichRequiredServices(
       parsed.requiredServices,
       parsed.intent,
@@ -160,7 +186,7 @@ export const analyzeQuery = async (query: string): Promise<PerceptionResult> => 
     logError(`Error analyzing query: ${error instanceof Error ? error.message : String(error)}`);
     logError(`Stack trace: ${error instanceof Error && error.stack ? error.stack : 'No stack trace'}`);
     
-    // В случае ошибки возвращаем fallback с низкой уверенностью
+    // In case of an error, return a fallback with low confidence
     return {
       intent: 'error',
       confidence: 0.1,
@@ -185,19 +211,19 @@ const validateAndEnrichRequiredServices = (
   query: string,
   entities: Record<string, unknown> | null
 ): DatabaseService[] => {
-  // Если список пуст, вернуть хотя бы один сервис на основе простой эвристики
+  // If the list is empty, return at least one service based on simple heuristics
   if (services.length === 0) {
     return inferServicesFromQuery(query);
   }
   
-  // Преобразуем в Set для удобства работы и исключения дубликатов
+  // Convert to Set for easier manipulation and duplicate removal
   const serviceSet = new Set(services);
   const queryLower = query.toLowerCase();
   const intentLower = intent.toLowerCase();
   
-  // Проверка на ситуации, когда запрос явно охватывает несколько сервисов
+  // Check for situations where the query explicitly covers multiple services
   
-  // Кейс 1: Запрос сравнивает данные из нескольких доменов
+  // Case 1: Query compares data from multiple domains
   if (
     (queryLower.includes('deposit') || queryLower.includes('депозит')) && 
     (queryLower.includes('bet') || queryLower.includes('ставк'))
@@ -206,7 +232,7 @@ const validateAndEnrichRequiredServices = (
     serviceSet.add('bets-history');
   }
   
-  // Кейс 2: Запрос о пользователях с определенным балансом и их активности
+  // Case 2: Query about users with a specific balance and their activity
   if (
     (queryLower.includes('balanc') || queryLower.includes('баланс')) && 
     (queryLower.includes('activ') || queryLower.includes('активност'))
@@ -215,7 +241,7 @@ const validateAndEnrichRequiredServices = (
     serviceSet.add('user-activities');
   }
   
-  // Кейс 3: Анализ зависимости между депозитами и логинами
+  // Case 3: Analysis of the relationship between deposits and logins
   if (
     (queryLower.includes('deposit') || queryLower.includes('депозит')) && 
     (queryLower.includes('login') || queryLower.includes('вход'))
@@ -224,7 +250,7 @@ const validateAndEnrichRequiredServices = (
     serviceSet.add('user-activities');
   }
   
-  // Кейс 4: Запросы, связанные с транзакциями и балансом
+  // Case 4: Queries related to transactions and balance
   if (
     (queryLower.includes('transaction') || queryLower.includes('транзакц')) && 
     (queryLower.includes('balanc') || queryLower.includes('баланс'))
@@ -233,9 +259,9 @@ const validateAndEnrichRequiredServices = (
     serviceSet.add('wallet');
   }
   
-  // Проверки на основе намерения (intent)
+  // Additional checks based on intent
   if (intentLower.includes('compar') || intentLower.includes('сравн')) {
-    // Для сравнительных запросов проверим ключевые слова
+    // For comparative queries, check for relevant keywords
     if (intentLower.includes('deposit') || intentLower.includes('депозит')) {
       serviceSet.add('financial-history');
     }
@@ -250,17 +276,17 @@ const validateAndEnrichRequiredServices = (
     }
   }
   
-  // Проверка сущностей
+  // Entity checks
   if (entities) {
     if ('user_id' in entities || 'userId' in entities) {
-      // Если запрос включает конкретного пользователя, вероятно потребуются данные о его активности
+      // If the query includes a specific user, likely required user activity data
       serviceSet.add('user-activities');
     }
     
     if ('timeframe' in entities || 'period' in entities) {
-      // Запросы с временными периодами часто требуют несколько источников данных
+      // Queries with time periods often require multiple data sources
       if (serviceSet.has('financial-history')) {
-        // Если запрос о финансах за период, может потребоваться информация о ставках
+        // If querying financial history for a period, may need bet information
         serviceSet.add('bets-history');
       }
     }
@@ -276,227 +302,96 @@ const validateAndEnrichRequiredServices = (
  */
 const inferServicesFromQuery = (query: string): DatabaseService[] => {
   const queryLower = query.toLowerCase();
-  const services: Set<DatabaseService> = new Set();
+  const inferredServices: DatabaseService[] = [];
   
-  // Проверяем ключевые слова для определения необходимых сервисов
-  if (queryLower.includes('deposit') || queryLower.includes('withdraw') || 
-      queryLower.includes('transaction') || queryLower.includes('bonus') ||
-      queryLower.includes('депозит') || queryLower.includes('вывод') ||
-      queryLower.includes('транзакц') || queryLower.includes('бонус')) {
-    services.add('financial-history');
+  // Basic keyword-based inference
+  if (queryLower.includes('user') || queryLower.includes('пользовател')) {
+    inferredServices.push('pam');
+  }
+  if (queryLower.includes('balance') || queryLower.includes('баланс') || queryLower.includes('wallet') || queryLower.includes('кошелек')) {
+    inferredServices.push('wallet');
+  }
+  if (queryLower.includes('bet') || queryLower.includes('ставк')) {
+    inferredServices.push('bets-history');
+  }
+  if (queryLower.includes('deposit') || queryLower.includes('депозит') || queryLower.includes('withdrawal') || queryLower.includes('вывод')) {
+    inferredServices.push('financial-history');
+  }
+  if (queryLower.includes('activity') || queryLower.includes('активность') || queryLower.includes('session') || queryLower.includes('сессия')) {
+    inferredServices.push('user-activities');
+  }
+  // Add more rules as needed...
+  
+  // Default to 'pam' if no other service is inferred and query mentions users
+  if (inferredServices.length === 0 && (queryLower.includes('user') || queryLower.includes('пользовател'))) {
+    inferredServices.push('pam');
   }
   
-  if (queryLower.includes('bet') || queryLower.includes('game') || 
-      queryLower.includes('win') || queryLower.includes('loss') ||
-      queryLower.includes('ставк') || queryLower.includes('игр') || 
-      queryLower.includes('выигр') || queryLower.includes('проигр')) {
-    services.add('bets-history');
+  // If still empty, it's hard to guess, maybe return a general service or empty
+  // For now, let's return 'pam' as a last resort if users are mentioned at all.
+  // Or, if truly generic, perhaps an empty array is better and let planning decide or error out.
+  if (inferredServices.length === 0) {
+    logWarn(`Could not infer services for query: "${query}". Returning empty service list.`);
   }
   
-  if (queryLower.includes('login') || queryLower.includes('session') || 
-      queryLower.includes('activity') || queryLower.includes('preference') ||
-      queryLower.includes('вход') || queryLower.includes('сессия') || 
-      queryLower.includes('активност') || queryLower.includes('настройк')) {
-    services.add('user-activities');
-  }
-  
-  if (queryLower.includes('balance') || queryLower.includes('wallet') || 
-      queryLower.includes('limit') || 
-      queryLower.includes('баланс') || queryLower.includes('кошелек') || 
-      queryLower.includes('лимит')) {
-    services.add('wallet');
-  }
-  
-  if (queryLower.includes('partner') || queryLower.includes('affiliate') || 
-      queryLower.includes('партнер') || queryLower.includes('аффилиат')) {
-    services.add('affiliate');
-  }
-  
-  if (queryLower.includes('casino') || queryLower.includes('казино') || 
-      queryLower.includes('slot') || queryLower.includes('слот')) {
-    services.add('casino-st8');
-  }
-  
-  if (queryLower.includes('location') || queryLower.includes('country') || 
-      queryLower.includes('geo') || queryLower.includes('ip') ||
-      queryLower.includes('локация') || queryLower.includes('страна') || 
-      queryLower.includes('гео')) {
-    services.add('geolocation');
-  }
-  
-  if (queryLower.includes('kyc') || queryLower.includes('verify') || 
-      queryLower.includes('document') || queryLower.includes('identification') ||
-      queryLower.includes('верификац') || queryLower.includes('документ') || 
-      queryLower.includes('идентификац')) {
-    services.add('kyc');
-  }
-  
-  if (queryLower.includes('notification') || queryLower.includes('message') || 
-      queryLower.includes('alert') || queryLower.includes('email') || 
-      queryLower.includes('sms') || queryLower.includes('push') ||
-      queryLower.includes('уведомлен') || queryLower.includes('сообщен')) {
-    services.add('notification');
-  }
-  
-  if (queryLower.includes('marketing') || queryLower.includes('campaign') || 
-      queryLower.includes('маркетинг') || queryLower.includes('кампани')) {
-    services.add('optimove');
-  }
-  
-  if (queryLower.includes('account') || queryLower.includes('profile') || 
-      queryLower.includes('user') || queryLower.includes('setting') ||
-      queryLower.includes('аккаунт') || queryLower.includes('профиль') || 
-      queryLower.includes('пользовател') || queryLower.includes('настройк')) {
-    services.add('pam');
-  }
-  
-  if (queryLower.includes('payment') || queryLower.includes('method') || 
-      queryLower.includes('gateway') || queryLower.includes('provider') ||
-      queryLower.includes('оплат') || queryLower.includes('метод') || 
-      queryLower.includes('платеж')) {
-    services.add('payment-gateway');
-  }
-  
-  if (queryLower.includes('traffic') || queryLower.includes('utm') || 
-      queryLower.includes('source') || queryLower.includes('campaign') ||
-      queryLower.includes('трафик') || queryLower.includes('источник')) {
-    services.add('traffic');
-  }
-  
-  // Если не смогли определить ни одного сервиса, возвращаем financial-history как наиболее общий
-  if (services.size === 0) {
-    services.add('financial-history');
-  }
-  
-  return Array.from(services);
+  // Remove duplicates by converting to Set and back to Array
+  return Array.from(new Set(inferredServices));
 };
 
 /**
- * Provides a fallback response when OpenAI is not available
+ * Fallback response generator when OpenAI is not available
+ * @param query User query
+ * @returns Fallback perception result
  */
 const getFallbackResponse = (query: string): PerceptionResult => {
-  // Простая эвристика для определения намерения по ключевым словам
   const queryLower = query.toLowerCase();
-  
-  // Анализируем запрос на наличие нескольких тем
-  const services = inferServicesFromQuery(query);
-  
-  // Определяем основное намерение на основе найденных сервисов
-  let primaryIntent = 'unknown';
+  let intent = 'unknown_intent';
   let confidence = 0.5;
-  let entities: Record<string, unknown> | null = null;
+  let requiredServices: DatabaseService[] = [];
   let sqlQuery: string | null = null;
+
+  // Basic intent detection based on keywords
+  if (queryLower.includes('how many users') || queryLower.includes('count users') || queryLower.includes('сколько пользователей')) {
+    intent = 'count_users';
+    requiredServices = ['pam'];
+    sqlQuery = 'SELECT COUNT(*) FROM "User"'; // Ensure quoted table name
+    confidence = 0.8;
+  } else if (queryLower.includes('list users') || queryLower.includes('show users') || queryLower.includes('список пользователей')) {
+    intent = 'list_users';
+    requiredServices = ['pam'];
+    sqlQuery = 'SELECT * FROM "User" LIMIT 10'; // Ensure quoted table name
+    confidence = 0.7;
+  } else if (queryLower.includes('balance') || queryLower.includes('баланс')) {
+    intent = 'get_balance';
+    requiredServices = ['wallet'];
+    // Cannot form a good SQL query without user ID here
+    confidence = 0.6;
+  } else if (queryLower.includes('deposit') || queryLower.includes('депозит')) {
+    intent = 'get_deposits';
+    requiredServices = ['financial-history'];
+    confidence = 0.6;
+  } else if (queryLower.includes('bet') || queryLower.includes('ставк')) {
+    intent = 'get_bets';
+    requiredServices = ['bets-history'];
+    confidence = 0.6;
+  }
   
-  // Создаем объект entities для хранения информации
-  entities = { timeframe: 'last_week' };
-  
-  // Добавляем user_id, если есть упоминание конкретного пользователя
-  if (queryLower.match(/user\s+(\d+)/i) || queryLower.match(/пользовател[ья]\s+(\d+)/i)) {
-    const userIdMatch = queryLower.match(/user\s+(\d+)/i) || queryLower.match(/пользовател[ья]\s+(\d+)/i);
-    if (userIdMatch && userIdMatch[1]) {
-      entities.userId = parseInt(userIdMatch[1], 10);
+  // Если ничего не определено, пытаемся угадать сервисы
+  if (requiredServices.length === 0) {
+    requiredServices = inferServicesFromQuery(query);
+    if (requiredServices.length > 0) {
+      confidence = 0.4; // Lower confidence as it's a guess
+    } else {
+      confidence = 0.2; // Very low confidence
     }
   }
-  
-  // Определяем намерение и SQL-запрос на основе комбинации сервисов
-  if (services.includes('financial-history') && services.includes('bets-history')) {
-    // Комбинированный запрос о депозитах и ставках
-    logInfo('Fallback: Detected combined deposit and bet query');
-    primaryIntent = 'get_deposit_and_bet_info';
-    confidence = 0.6;
-    sqlQuery = `-- Запрос к financial-history
-                SELECT u.user_id, COUNT(t.id) as deposit_count, SUM(t.amount) as total_deposits
-                FROM transactions t
-                JOIN users u ON t.user_id = u.id
-                WHERE t.type = 'deposit' 
-                AND t.created_at >= NOW() - INTERVAL '7 days'
-                GROUP BY u.user_id;
-                
-                -- Запрос к bets-history
-                SELECT u.user_id, COUNT(b.id) as bet_count, SUM(b.amount) as total_bets
-                FROM bets b
-                JOIN users u ON b.user_id = u.id
-                WHERE b.created_at >= NOW() - INTERVAL '7 days'
-                GROUP BY u.user_id;`;
-  }
-  else if (services.includes('wallet') && services.includes('user-activities')) {
-    // Комбинированный запрос о балансе и активности
-    logInfo('Fallback: Detected combined wallet and activity query');
-    primaryIntent = 'get_balance_and_activity_info';
-    confidence = 0.6;
-    sqlQuery = `-- Запрос к wallet
-                SELECT w.user_id, w.current_balance, w.currency
-                FROM wallets w
-                WHERE w.current_balance > 0;
-                
-                -- Запрос к user-activities
-                SELECT a.user_id, COUNT(a.id) as login_count, MAX(a.login_at) as last_login
-                FROM user_sessions a
-                WHERE a.login_at >= NOW() - INTERVAL '7 days'
-                GROUP BY a.user_id;`;
-  }
-  else if (services.includes('financial-history') && services.includes('user-activities')) {
-    // Комбинированный запрос о транзакциях и активности
-    logInfo('Fallback: Detected combined transaction and activity query');
-    primaryIntent = 'get_transaction_and_activity_info';
-    confidence = 0.6;
-    sqlQuery = `-- Запрос к financial-history
-                SELECT t.user_id, COUNT(t.id) as transaction_count, SUM(t.amount) as total_amount
-                FROM transactions t
-                WHERE t.created_at >= NOW() - INTERVAL '7 days'
-                GROUP BY t.user_id;
-                
-                -- Запрос к user-activities
-                SELECT a.user_id, COUNT(a.id) as login_count
-                FROM user_sessions a
-                WHERE a.login_at >= NOW() - INTERVAL '7 days'
-                GROUP BY a.user_id;`;
-  }
-  // Одиночные сервисы (предыдущая логика)
-  else if (services.includes('financial-history')) {
-    logInfo('Fallback: Detected deposit-related query');
-    primaryIntent = 'get_deposit_info';
-    confidence = 0.7;
-    sqlQuery = `SELECT COUNT(*) as deposit_count, SUM(amount) as total_amount 
-                FROM transactions 
-                WHERE type = 'deposit' 
-                AND created_at >= NOW() - INTERVAL '7 days'`;
-  }
-  else if (services.includes('bets-history')) {
-    logInfo('Fallback: Detected bet-related query');
-    primaryIntent = 'get_bet_history';
-    confidence = 0.7;
-    sqlQuery = `SELECT COUNT(*) as bet_count, SUM(amount) as total_amount 
-                FROM bets 
-                WHERE created_at >= NOW() - INTERVAL '7 days'`;
-  }
-  else if (services.includes('wallet')) {
-    logInfo('Fallback: Detected wallet-related query');
-    primaryIntent = 'get_wallet_balance';
-    confidence = 0.7;
-    sqlQuery = `SELECT current_balance FROM wallets WHERE user_id = :userId`;
-  }
-  else if (services.includes('user-activities')) {
-    logInfo('Fallback: Detected user activity-related query');
-    primaryIntent = 'get_user_activity';
-    confidence = 0.7;
-    sqlQuery = `SELECT COUNT(*) as login_count FROM user_sessions 
-                WHERE login_at >= NOW() - INTERVAL '7 days'`;
-  }
-  else {
-    // По умолчанию если не удалось определить запрос
-    logInfo('Fallback: Unable to determine query intent');
-    primaryIntent = 'unknown';
-    confidence = 0.1;
-    entities = null;
-    sqlQuery = null;
-  }
-  
+
+  logInfo(`Using fallback perception for query "${query}": intent=${intent}, confidence=${confidence}`);
   return {
-    intent: primaryIntent,
-    confidence: confidence,
-    entities: entities,
-    requiredServices: services,
-    sqlQuery: sqlQuery
+    intent,
+    confidence,
+    entities: null, // Fallback doesn't extract entities
+    requiredServices,
+    sqlQuery,
   };
 }; 
