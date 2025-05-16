@@ -19,6 +19,7 @@ type QueryResult = {
 type QueryRequest = {
   query: string;
   language: Language;
+  queryId: string;
 };
 
 const App: React.FC = () => {
@@ -31,40 +32,34 @@ const App: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
     if (!query.trim()) return;
-    
     setLoading(true);
     setError(null);
     setResult(null);
-    setQueryId(null);
-    
     try {
+      // 1. Получаем queryId
+      const initRes = await fetch('/api/query/init', { method: 'POST' });
+      if (!initRes.ok) throw new Error('Failed to init query');
+      const { queryId: newQueryId } = await initRes.json();
+      setQueryId(newQueryId);
+      // 2. Отправляем основной запрос с этим queryId
       let modifiedQuery = query;
       if (language === 'ru' && languageInstructions.ru) {
         modifiedQuery = `${query} ${languageInstructions.ru}`;
       }
-
       const queryRequest: QueryRequest = {
         query: modifiedQuery,
-        language
+        language,
+        queryId: newQueryId
       };
-
-      const response = await fetch('/api/query', {
+      await fetch('/api/query', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(queryRequest),
       });
-      
-      if (!response.ok) {
-        throw new Error(`Error: ${response.status} ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      setResult(data);
-      if (data.queryId) setQueryId(data.queryId);
+      // результат появится через onResult из событий
     } catch (err) {
       setError((err as Error).message || t.errorDefault);
     } finally {
@@ -105,10 +100,16 @@ const App: React.FC = () => {
       {error && <div className="error-message">{error}</div>}
       
       {queryId && (
-        <QueryExecutionLog queryId={queryId} isActive={loading} />
+        <QueryExecutionLog 
+          queryId={queryId} 
+          isActive={true}
+          onResult={payload => {
+            setResult(payload);
+          }}
+        />
       )}
       
-      {result && (
+      {result && result.data && (
         <div className="result-container">
           <div className="explanation">
             <h2>{t.explanationTitle}</h2>

@@ -27,6 +27,7 @@ interface BaseEvent {
 interface QueryExecutionLogProps {
   queryId: string | null;
   isActive: boolean;
+  onResult?: (result: any) => void;
 }
 
 // Map event types to human-readable names
@@ -51,12 +52,16 @@ const statusColors: Record<EventStatus, string> = {
   error: '#e57373' // Red
 };
 
-const QueryExecutionLog: React.FC<QueryExecutionLogProps> = ({ queryId, isActive }) => {
+const QueryExecutionLog: React.FC<QueryExecutionLogProps> = ({ queryId, isActive, onResult }) => {
   const [events, setEvents] = useState<BaseEvent[]>([]);
   const [lastTimestamp, setLastTimestamp] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const logContainerRef = useRef<HTMLDivElement>(null);
+  const lastResultEventRef = useRef<string | null>(null);
+  const [visibleEvent, setVisibleEvent] = useState<BaseEvent | null>(null);
+  const [fade, setFade] = useState(false);
+  const prevEventId = useRef<string | null>(null);
   
   // Format timestamp to relative time
   const formatTimestamp = (timestamp: number): string => {
@@ -156,6 +161,31 @@ const QueryExecutionLog: React.FC<QueryExecutionLogProps> = ({ queryId, isActive
     }
   }, [events.length]);
   
+  // Call onResult when response_generation/completed event is added
+  useEffect(() => {
+    if (!onResult) return;
+    const lastResultEvent = [...events].reverse().find(
+      e => e.type === 'response_generation' && e.status === 'completed'
+    );
+    if (lastResultEvent && lastResultEvent.id !== lastResultEventRef.current) {
+      lastResultEventRef.current = lastResultEvent.id;
+      onResult(lastResultEvent.payload);
+    }
+  }, [events, onResult]);
+  
+  useEffect(() => {
+    if (events.length === 0) return;
+    const lastEvent = events[events.length - 1];
+    if (lastEvent.id !== prevEventId.current) {
+      setFade(true);
+      setTimeout(() => {
+        setVisibleEvent(lastEvent);
+        setFade(false);
+        prevEventId.current = lastEvent.id;
+      }, 200); // fade out old, then fade in new
+    }
+  }, [events]);
+  
   if (!queryId) {
     return null;
   }
@@ -163,53 +193,49 @@ const QueryExecutionLog: React.FC<QueryExecutionLogProps> = ({ queryId, isActive
   return (
     <div className="query-execution-log">
       <h3>Query Execution Progress</h3>
-      
-      {loading && events.length === 0 && <div className="loading">Loading...</div>}
-      
+      {loading && !visibleEvent && <div className="loading">Loading...</div>}
       {error && <div className="error-message">{error}</div>}
-      
-      <div className="log-container" ref={logContainerRef}>
-        {events.length === 0 && !loading ? (
-          <div className="empty-log">No execution events available</div>
+      <div
+        className="event-fade-container"
+        style={{
+          opacity: fade ? 0 : 1,
+          transition: 'opacity 0.3s',
+          minHeight: 80,
+        }}
+      >
+        {visibleEvent ? (
+          <div className={`event-item ${visibleEvent.status}`}>
+            <div className="event-header">
+              <span
+                className="event-status-indicator"
+                style={{ backgroundColor: statusColors[visibleEvent.status] }}
+              />
+              <span className="event-name">{eventNames[visibleEvent.type] || visibleEvent.type}</span>
+              <span className="event-timestamp">{formatTimestamp(visibleEvent.timestamp)}</span>
+            </div>
+            <div className="event-details">
+              <span className="event-status">Status: {visibleEvent.status}</span>
+              {visibleEvent.type === 'step_execution' && visibleEvent.payload.stepNumber && (
+                <div className="step-info">
+                  Step {visibleEvent.payload.stepNumber} of {visibleEvent.payload.totalSteps}: {visibleEvent.payload.description || 'Executing step'}
+                </div>
+              )}
+              {visibleEvent.type === 'sql_execution' && visibleEvent.payload.sql && (
+                <div className="sql-info">
+                  <div>Service: {visibleEvent.payload.service}</div>
+                  <pre>{visibleEvent.payload.sql}</pre>
+                </div>
+              )}
+              {visibleEvent.type === 'completion' && visibleEvent.status === 'completed' && (
+                <div className="completion-info">
+                  <div>Total Time: {((visibleEvent.payload.totalTime || 0) / 1000).toFixed(2)}s</div>
+                  <div>Steps Executed: {visibleEvent.payload.stepCount}</div>
+                </div>
+              )}
+            </div>
+          </div>
         ) : (
-          <ul className="event-list">
-            {events.map(event => (
-              <li key={event.id} className={`event-item ${event.status}`}>
-                <div className="event-header">
-                  <span 
-                    className="event-status-indicator" 
-                    style={{ backgroundColor: statusColors[event.status] }}
-                  />
-                  <span className="event-name">{eventNames[event.type] || event.type}</span>
-                  <span className="event-timestamp">{formatTimestamp(event.timestamp)}</span>
-                </div>
-                
-                <div className="event-details">
-                  <span className="event-status">Status: {event.status}</span>
-                  
-                  {event.type === 'step_execution' && event.payload.stepNumber && (
-                    <div className="step-info">
-                      Step {event.payload.stepNumber} of {event.payload.totalSteps}: {event.payload.description || 'Executing step'}
-                    </div>
-                  )}
-                  
-                  {event.type === 'sql_execution' && event.payload.sql && (
-                    <div className="sql-info">
-                      <div>Service: {event.payload.service}</div>
-                      <pre>{event.payload.sql}</pre>
-                    </div>
-                  )}
-                  
-                  {event.type === 'completion' && event.status === 'completed' && (
-                    <div className="completion-info">
-                      <div>Total Time: {((event.payload.totalTime || 0) / 1000).toFixed(2)}s</div>
-                      <div>Steps Executed: {event.payload.stepCount}</div>
-                    </div>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
+          <div className="empty-log">No execution events available</div>
         )}
       </div>
     </div>

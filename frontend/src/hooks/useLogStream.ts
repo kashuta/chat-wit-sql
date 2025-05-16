@@ -38,7 +38,7 @@ const useLogStream = ({ queryId, autoConnect = true }: UseLogStreamOptions) => {
       });
 
       // Handle errors
-      eventSource.onerror = (err) => {
+      eventSource.onerror = () => {
         setIsConnected(false);
         setError('Log stream connection failed');
         eventSource.close();
@@ -61,6 +61,7 @@ const useLogStream = ({ queryId, autoConnect = true }: UseLogStreamOptions) => {
       const cleanup = connect();
       return cleanup;
     }
+    return undefined;
   }, [queryId]);
 
   return {
