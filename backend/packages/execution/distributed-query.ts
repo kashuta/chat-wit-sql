@@ -889,7 +889,7 @@ export class DistributedQueryProcessor {
           }
           
           // Добавляем кавычки к идентификаторам, но не к ключевым словам SQL
-          return column.replace(/\b([A-Za-z0-9_]+)\b/g, (match, word) => {
+          return column.replace(/\b([A-Za-z0-9_]+)\b/g, (_, word) => {
             if (sqlKeywords.includes(word.toUpperCase())) {
               return word; // Возвращаем ключевое слово без кавычек
             }
