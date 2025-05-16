@@ -1,4 +1,8 @@
 import React, { useState } from 'react';
+import { useLanguage } from './contexts/LanguageContext';
+import LanguageSwitcher from './components/LanguageSwitcher';
+import { Language } from './localization';
+import { languageInstructions } from './config/languageConfig';
 
 type QueryResult = {
   data: Record<string, unknown>;
@@ -11,7 +15,13 @@ type QueryResult = {
   };
 };
 
+type QueryRequest = {
+  query: string;
+  language: Language;
+};
+
 const App: React.FC = () => {
+  const { t, language } = useLanguage();
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<QueryResult | null>(null);
@@ -27,12 +37,22 @@ const App: React.FC = () => {
     setResult(null);
     
     try {
+      let modifiedQuery = query;
+      if (language === 'ru' && languageInstructions.ru) {
+        modifiedQuery = `${query} ${languageInstructions.ru}`;
+      }
+
+      const queryRequest: QueryRequest = {
+        query: modifiedQuery,
+        language
+      };
+
       const response = await fetch('/api/query', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify(queryRequest),
       });
       
       if (!response.ok) {
@@ -42,7 +62,7 @@ const App: React.FC = () => {
       const data = await response.json();
       setResult(data);
     } catch (err) {
-      setError((err as Error).message || 'Failed to process query');
+      setError((err as Error).message || t.errorDefault);
     } finally {
       setLoading(false);
     }
@@ -51,20 +71,30 @@ const App: React.FC = () => {
   return (
     <div className="container">
       <header className="header">
-        <h1>Dante AI Data Agent</h1>
-        <p>Ask questions about your data using natural language</p>
+        <div className="header-top">
+          <h1>{t.title}</h1>
+          <LanguageSwitcher />
+        </div>
+        <p>{t.subtitle}</p>
       </header>
       
       <form onSubmit={handleSubmit} className="query-form">
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="e.g., Show me the top 10 users by deposit amount for the last week"
-          className="query-input"
-        />
+        <div className="input-container">
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t.inputPlaceholder}
+            className="query-input"
+          />
+          {language === 'ru' && (
+            <div className="language-hint">
+              * {t.languageHint || "Instruction \"Отвечай на русском\" will be added to your query"}
+            </div>
+          )}
+        </div>
         <button type="submit" disabled={loading} className="submit-button">
-          {loading ? 'Processing...' : 'Ask'}
+          {loading ? t.processingButton : t.askButton}
         </button>
       </form>
       
@@ -73,22 +103,22 @@ const App: React.FC = () => {
       {result && (
         <div className="result-container">
           <div className="explanation">
-            <h2>Explanation</h2>
+            <h2>{t.explanationTitle}</h2>
             <p>{result.explanation}</p>
             <div className="confidence">
-              Confidence: {(result.confidence * 100).toFixed(0)}%
+              {t.confidenceLabel}: {(result.confidence * 100).toFixed(0)}%
             </div>
           </div>
           
           {result.sql && (
             <div className="sql-query">
-              <h3>SQL Query</h3>
+              <h3>{t.sqlQueryTitle}</h3>
               <pre>{result.sql}</pre>
             </div>
           )}
           
           <div className="data-section">
-            <h3>Data</h3>
+            <h3>{t.dataTitle}</h3>
             {Object.entries(result.data).map(([service, data]) => (
               <div key={service} className="service-data">
                 <h4>{service}</h4>

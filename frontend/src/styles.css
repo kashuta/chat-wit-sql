@@ -32,6 +32,42 @@ body {
   margin-bottom: 2rem;
 }
 
+.header-top {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  position: relative;
+}
+
+.language-switcher {
+  position: absolute;
+  right: 0;
+  display: flex;
+  gap: 0.25rem;
+}
+
+.lang-btn {
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--primary-color);
+  background-color: transparent;
+  color: var(--primary-color);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border-radius: 0.25rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.lang-btn:hover {
+  background-color: rgba(79, 70, 229, 0.1);
+}
+
+.lang-btn.active {
+  background-color: var(--primary-color);
+  color: white;
+}
+
 .header h1 {
   font-size: 2.5rem;
   color: var(--primary-color);
@@ -49,12 +85,25 @@ body {
   margin-bottom: 2rem;
 }
 
-.query-input {
+.input-container {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.query-input {
+  width: 100%;
   padding: 1rem;
   font-size: 1rem;
   border: 1px solid var(--border-color);
   border-radius: 0.5rem;
+}
+
+.language-hint {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: #666;
+  font-style: italic;
 }
 
 .submit-button {

@@ -891,6 +891,14 @@ export class DistributedQueryProcessor {
       return fixedQuery;
     }
     
+    // Fix 1: Исправление ошибки с числовыми значениями в WHERE условиях
+    const numericValuePattern = /Column "(\d+)" not found/i;
+    const numericMatch = fixedQuery.match(numericValuePattern);
+    if (numericMatch) {
+      logInfo(`Detected numeric value misinterpreted as column name: ${numericMatch[1]}`);
+      return fixedQuery;
+    }
+
     // Extract table references
     const tableRegex = /\bFROM\s+"?([A-Za-z0-9_]+)"?/gi;
     const joinRegex = /\bJOIN\s+"?([A-Za-z0-9_]+)"?/gi;
@@ -1041,6 +1049,33 @@ export class DistributedQueryProcessor {
   }
   
   /**
+   * Проверяет, является ли строка SQL-литералом (число, строка, булево значение)
+   */
+  private isSqlLiteral(value: string): boolean {
+    // Проверка на числовое значение
+    if (/^[0-9]+(\.[0-9]+)?$/.test(value)) {
+      return true;
+    }
+    
+    // Проверка на строковый литерал в одинарных кавычках
+    if (/^'[^']*'$/.test(value)) {
+      return true;
+    }
+    
+    // Проверка на булевы значения
+    if (/^(true|false)$/i.test(value)) {
+      return true;
+    }
+    
+    // Проверка на NULL
+    if (/^null$/i.test(value)) {
+      return true;
+    }
+    
+    return false;
+  }
+  
+  /**
    * Validates an SQL query against the service schema
    */
   private validateSqlAgainstSchema(
@@ -1101,16 +1136,28 @@ export class DistributedQueryProcessor {
       // Also look for column references without table qualifier in SELECT, WHERE, ORDER BY, etc.
       const columnPatterns = [
         /\bSELECT\s+(?:.*?)(?:,\s*)?([A-Za-z0-9_]+)(?:\s|,|$)/gi,
-        /\bWHERE\s+(?:.*?[=><])\s*([A-Za-z0-9_]+)(?:\s|$)/gi,
         /\bWHERE\s+([A-Za-z0-9_]+)\s*(?:[=><])/gi,
         /\bORDER\s+BY\s+([A-Za-z0-9_]+)/gi,
         /\bGROUP\s+BY\s+([A-Za-z0-9_]+)/gi
       ];
       
+      // Игнорируем литералы в условиях WHERE
+      const whereValuePattern = /\bWHERE\s+(?:[A-Za-z0-9_"]+)(?:\s*[=><]\s*)([0-9]+|'[^']*'|true|false)/gi;
+      const whereValueMatches = new Set<string>();
+      
+      while ((match = whereValuePattern.exec(sqlQuery)) !== null) {
+        if (match[1]) {
+          whereValueMatches.add(match[1]);
+        }
+      }
+      
       for (const pattern of columnPatterns) {
         while ((match = pattern.exec(sqlQuery)) !== null) {
-          // Пропускаем SQL ключевые слова
-          if (!sqlKeywords.includes(match[1].toUpperCase()) && !columns.includes(match[1])) {
+          // Пропускаем SQL ключевые слова и литералы
+          if (!sqlKeywords.includes(match[1].toUpperCase()) && 
+              !columns.includes(match[1]) && 
+              !whereValueMatches.has(match[1]) && 
+              !this.isSqlLiteral(match[1])) {
             columns.push(match[1]);
           }
         }
