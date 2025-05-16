@@ -244,49 +244,117 @@ async function validateQueryTables(service: DatabaseService, query: string): Pro
   
   const tableRegex = /\bFROM\s+"?([A-Za-z0-9_]+)"?/gi;
   const joinRegex = /\bJOIN\s+"?([A-Za-z0-9_]+)"?/gi;
+  const subqueryFromRegex = /\(\s*SELECT\s+.+?\s+FROM\s+"?([A-Za-z0-9_]+)"?/gi;
   
   let modifiedQuery = query;
   let matches;
   
-  const processTableReference = (tableName: string) => {
+  // Build a map of tables for all services for cross-reference checking
+  const allServicesTables = new Map<string, string[]>();
+  const allDatabases = databaseKnowledge.getAllDatabases();
+  
+  for (const db of allDatabases) {
+    allServicesTables.set(db.service, db.tables.map(t => t.name));
+  }
+  
+  // Process all table references in the query
+  const processTableReference = (tableName: string, regex: RegExp | null = null, matchStr: string | null = null) => {
     const knownTables = dbInfo.tables.map(t => t.name);
+    
+    // Check if table exists in this service
     const tableExists = knownTables.some(t => t.toLowerCase() === tableName.toLowerCase());
     
     if (!tableExists) {
-      const similarNames = findSimilarTableNames(knownTables, tableName);
+      // Check if this table exists in another service
+      let crossServiceTable = false;
+      let crossServiceName = '';
       
-      if (similarNames.length > 0) {
-        const correctName = similarNames[0];
-        logInfo(`Fixing table reference: "${tableName}" -> "${correctName}"`);
+      for (const [serviceName, tables] of allServicesTables.entries()) {
+        if (serviceName !== service && tables.some(t => t.toLowerCase() === tableName.toLowerCase())) {
+          crossServiceTable = true;
+          crossServiceName = serviceName;
+          break;
+        }
+      }
+      
+      if (crossServiceTable) {
+        logInfo(`Table "${tableName}" was found in service "${crossServiceName}" but is being referenced in ${service} service.`);
+        // We don't try to fix cross-service tables here - that should be handled at the plan building stage
+      } else {
+        // Try to find similar table names in this service
+        const similarNames = findSimilarTableNames(knownTables, tableName);
         
-        modifiedQuery = modifiedQuery.replace(
-          new RegExp(`\\b${tableName}\\b`, 'gi'),
-          `"${correctName}"`
-        );
+        if (similarNames.length > 0) {
+          const correctName = similarNames[0];
+          logInfo(`Fixing table reference: "${tableName}" -> "${correctName}"`);
+          
+          if (regex && matchStr) {
+            // Replace specific match with correct table name
+            const oldPart = matchStr;
+            const newPart = oldPart.replace(
+              new RegExp(`\\b${tableName}\\b`, 'gi'),
+              `"${correctName}"`
+            );
+            modifiedQuery = modifiedQuery.replace(oldPart, newPart);
+          } else {
+            // Generic replacement for all occurrences
+            modifiedQuery = modifiedQuery.replace(
+              new RegExp(`\\b${tableName}\\b`, 'gi'),
+              `"${correctName}"`
+            );
+          }
+        }
       }
     } else {
+      // Table exists but might have wrong case
       const exactTable = knownTables.find(t => t.toLowerCase() === tableName.toLowerCase());
       
       if (exactTable && exactTable !== tableName) {
         logInfo(`Correcting table case: "${tableName}" -> "${exactTable}"`);
         
+        if (regex && matchStr) {
+          const oldPart = matchStr;
+          const newPart = oldPart.replace(
+            new RegExp(`\\b${tableName}\\b`, 'gi'),
+            `"${exactTable}"`
+          );
+          modifiedQuery = modifiedQuery.replace(oldPart, newPart);
+        } else {
+          modifiedQuery = modifiedQuery.replace(
+            new RegExp(`\\b${tableName}\\b`, 'gi'),
+            `"${exactTable}"`
+          );
+        }
+      }
+      
+      // Also ensure proper quoting for table names
+      if (!tableName.startsWith('"') && !tableName.endsWith('"')) {
         modifiedQuery = modifiedQuery.replace(
-          new RegExp(`\\b${tableName}\\b`, 'gi'),
-          `"${exactTable}"`
+          new RegExp(`\\b${tableName}\\b(?!")`, 'g'),
+          `"${exactTable || tableName}"`
         );
       }
     }
   };
   
+  // Process FROM clauses
   while ((matches = tableRegex.exec(query)) !== null) {
     if (matches[1]) {
-      processTableReference(matches[1]);
+      processTableReference(matches[1], tableRegex, matches[0]);
     }
   }
   
+  // Process JOIN clauses
   while ((matches = joinRegex.exec(query)) !== null) {
     if (matches[1]) {
-      processTableReference(matches[1]);
+      processTableReference(matches[1], joinRegex, matches[0]);
+    }
+  }
+  
+  // Process subqueries
+  while ((matches = subqueryFromRegex.exec(query)) !== null) {
+    if (matches[1]) {
+      processTableReference(matches[1], subqueryFromRegex, matches[0]);
     }
   }
   
