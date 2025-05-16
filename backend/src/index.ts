@@ -3,6 +3,7 @@ import { startServer } from './server';
 import { setupDatabaseConnections } from '@execution/database';
 import { initialize, shutdown } from '@common/initialize';
 import { logInfo, logError } from '@common/logger';
+import { initializeEventStore } from './services/EventStore';
 
 // Load environment variables
 dotenv.config();
@@ -11,6 +12,9 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
 const main = async () => {
   try {
+    // Инициализация EventStore (Redis)
+    await initializeEventStore();
+    
     // Инициализация компонентов (включая загрузку данных о БД)
     await initialize();
     
