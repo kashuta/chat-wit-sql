@@ -5,8 +5,11 @@ import { getOpenAIModel, createOutputParser } from '@common/llm';
 import { executeSqlQuery as dbExecuteSqlQuery } from '@execution/database';
 import { EXECUTION_SYSTEM_PROMPT } from '../../data/prompts';
 import { distributedQueryProcessor } from './distributed-query';
-import { distributedPlanBuilder } from '@planning/distributed-plan-builder';
+import { DistributedPlanBuilder } from '../planning/distributed-plan-builder';
 import { logDebug, logInfo, logWarn } from '@common/logger';
+
+// Создаем экземпляр процессора планов
+const distributedPlanBuilder = new DistributedPlanBuilder();
 
 /**
  * Executes an SQL query with error handling and logging
