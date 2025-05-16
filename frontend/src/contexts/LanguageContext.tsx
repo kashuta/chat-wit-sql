@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useMemo } from 'react';
 import { Language, translations, Translations } from '../localization';
 
 interface LanguageContextType {
@@ -19,15 +19,20 @@ export const LanguageProvider: React.FC<{ children: ReactNode }> = ({ children }
       : defaultLanguage;
   });
 
-  const [t, setT] = useState(translations[language]);
+  const t = useMemo(() => translations[language], [language]);
 
   useEffect(() => {
     localStorage.setItem('language', language);
-    setT(translations[language]);
   }, [language]);
 
+  const value = useMemo(() => ({
+    language,
+    setLanguage,
+    t
+  }), [language, t]);
+
   return (
-    <LanguageContext.Provider value={{ language, setLanguage, t }}>
+    <LanguageContext.Provider value={value}>
       {children}
     </LanguageContext.Provider>
   );
