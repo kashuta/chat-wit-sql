@@ -1,49 +1,62 @@
 import dotenv from 'dotenv';
 import { startServer } from './server';
 import { setupDatabaseConnections } from '@execution/database';
-import { databaseKnowledge } from '@common/knowledge';
-import path from 'path';
-import { initialize } from '@common/initialize';
+import { initialize, shutdown } from '@common/initialize';
+import { logInfo, logError } from '@common/logger';
 
 // Load environment variables
 dotenv.config();
 
-// Initialize the application
-const initApp = async (): Promise<void> => {
+const PORT = parseInt(process.env.PORT || '3000', 10);
+
+const main = async () => {
   try {
-    // Инициализация SQL-помощника
+    // Инициализация компонентов (включая загрузку данных о БД)
     await initialize();
-    
-    // Load database descriptions
-    const knowledgeFilePath = path.join(__dirname, '../data/database-descriptions.json');
-    await databaseKnowledge.loadFromFile(knowledgeFilePath);
     
     // Set up database connections
     await setupDatabaseConnections();
     
-    // Start the server
-    const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
-    await startServer(port);
-    console.log(`Server running on port ${port}`);
-  } catch (err) {
-    console.error('Failed to initialize application:', err);
+    // Запуск HTTP сервера
+    await startServer(PORT);
+    logInfo(`Server running on port ${PORT}`);
+    
+    // Регистрация обработчиков для корректного завершения работы
+    const handleShutdown = async () => {
+      logInfo('Shutting down server...');
+      
+      try {
+        await shutdown();
+        logInfo('Server shutdown complete.');
+        process.exit(0);
+      } catch (error) {
+        logError(`Error during shutdown: ${(error as Error).message}`);
+        process.exit(1);
+      }
+    };
+    
+    // Обрабатываем сигналы завершения
+    process.on('SIGINT', handleShutdown);
+    process.on('SIGTERM', handleShutdown);
+    process.on('SIGUSR2', handleShutdown); // Nodemon restart
+    
+    // Обрабатываем необработанные исключения
+    process.on('uncaughtException', (error) => {
+      logError(`Uncaught exception: ${error.message}`);
+      logError(error.stack || 'No stack trace');
+      handleShutdown();
+    });
+    
+    // Обрабатываем необработанные отклоненные промисы
+    process.on('unhandledRejection', (reason, _promise) => {
+      logError(`Unhandled promise rejection: ${reason}`);
+      handleShutdown();
+    });
+    
+  } catch (error) {
+    logError(`Failed to start server: ${(error as Error).message}`);
     process.exit(1);
   }
 };
 
-// Handle graceful shutdown
-const handleShutdown = (): void => {
-  console.log('Shutting down gracefully...');
-  // Add cleanup logic here (close DB connections, etc.)
-  process.exit(0);
-};
-
-// Register shutdown handlers
-process.on('SIGINT', handleShutdown);
-process.on('SIGTERM', handleShutdown);
-
-// Start the application
-initApp().catch(err => {
-  console.error('Unhandled error during initialization:', err);
-  process.exit(1);
-}); 
+main(); 
