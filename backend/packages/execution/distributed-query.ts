@@ -531,16 +531,6 @@ export class DistributedQueryProcessor {
     logInfo(`Parameters to substitute: ${parameters.join(', ')}`);
     logInfo(`Dependent steps: ${dependsOnSteps.join(', ')}`);
     
-    // Проверяем, есть ли вообще динамические параметры в запросе
-    const hasPlaceholders = sqlQuery.includes('?');
-    const hasNamedParams = /[:$]\{?(\w+)\}?/g.test(sqlQuery);
-    const hasNumericParams = /\$\d+/.test(sqlQuery);
-    
-    if (!hasPlaceholders && !hasNamedParams && !hasNumericParams) {
-      logInfo(`No placeholder or named parameters found in the query. Returning original query.`);
-      return sqlQuery;
-    }
-    
     // Получаем результаты зависимых шагов
     const dependentResults: { [stepId: string]: Record<string, unknown>[] } = {};
     
@@ -553,141 +543,229 @@ export class DistributedQueryProcessor {
       }
     }
     
-    // Cначала обрабатываем placeholders в виде "?" - замена по порядку
-    if (hasPlaceholders) {
-      let placeholderIndex = 0;
-      
-      // Пытаемся заменить каждый placeholder на значение из зависимых шагов
-      parameterizedQuery = parameterizedQuery.replace(/\?/g, () => {
-        const param = parameters[placeholderIndex++];
-        if (!param) {
-          return '?'; // Если нет подходящего параметра, оставляем как есть
-        }
-        
-        // Ищем значение в зависимых шагах
-        for (const stepId of dependsOnSteps) {
-          const results = dependentResults[stepId];
-          if (results && results.length > 0) {
-            const firstRow = results[0];
-            // Смотрим, есть ли искомый параметр среди полей
-            Object.entries(firstRow).forEach(([key, value]) => {
-              // Сравниваем с игнорированием регистра
-              if (key.toLowerCase() === param.toLowerCase()) {
-                const formattedValue = this.formatValueForSql(value);
-                logInfo(`Replacing placeholder with ${key} = ${formattedValue} from step ${stepId}`);
-                parameterizedQuery = parameterizedQuery.replace("?", formattedValue);
-              }
-            });
-          }
-        }
-        
-        return `?`; // На случай, если не нашли замену
-      });
-    }
+    // Проверяем наличие именованных параметров в разных форматах
+    // Включаем ситуации с кавычками: :"userId", :"param", :param и т.д.
+    const namedParamRegex = /[:@]"?\w+"?|\$\{\w+\}|\$[0-9]+/g;
     
-    // Обрабатываем параметры вида $1, $2, и т.д.
-    if (hasNumericParams) {
-      logInfo(`Found numeric parameters ($1, $2, etc.) in query`);
+    // Проверяем, есть ли вообще какие-либо параметры в запросе
+    const matchedParams = sqlQuery.match(namedParamRegex);
+    
+    // Специфичная обработка для случая с запросом "WHERE "id" = :userId"
+    // Это прямая проверка паттерна из логов, который вызывал ошибку
+    if (sqlQuery.includes(`"id" = :userId`) || sqlQuery.includes(`"id" = :"userId"`)) {
+      logInfo(`Обнаружен известный проблемный паттерн: "id" = :userId или "id" = :"userId"`);
       
-      // Находим все числовые параметры и заменяем их на значения
-      for (let i = 0; i < parameters.length; i++) {
-        const param = parameters[i];
-        const paramToken = `$${i + 1}`;
-        
-        if (parameterizedQuery.includes(paramToken)) {
-          logInfo(`Found numeric parameter ${paramToken} for parameter ${param}`);
-          
-          // Ищем значение в зависимых шагах
-          let found = false;
+      // Ищем значение параметра userId
+      for (const param of parameters) {
+        if (param.toLowerCase() === 'userid') {
           for (const stepId of dependsOnSteps) {
-            const results = dependentResults[stepId];
+            const results = dependentResults[stepId] || [];
             
-            if (results && results.length > 0) {
-              const firstRow = results[0];
-              
-              // Перебираем поля результата
-              for (const [key, value] of Object.entries(firstRow)) {
-                // Проверяем соответствие имени параметра с учетом регистра
-                if (key.toLowerCase() === param.toLowerCase()) {
-                  const formattedValue = this.formatValueForSql(value);
-                  logInfo(`Found value for numeric parameter ${paramToken} = ${formattedValue} in step ${stepId}`);
+            if (results.length > 0) {
+              for (const [key, value] of Object.entries(results[0])) {
+                if (key.toLowerCase() === 'userid') {
+                  const sqlValue = this.formatValueForSql(value);
+                  // Заменяем проблемный паттерн
+                  const fixedQuery = sqlQuery
+                    .replace(`"id" = :userId`, `"id" = ${sqlValue}`)
+                    .replace(`"id" = :"userId"`, `"id" = ${sqlValue}`);
                   
-                  // Заменяем параметр в SQL
-                  parameterizedQuery = parameterizedQuery.replace(
-                    new RegExp(`\\${paramToken}\\b`, 'g'), 
-                    formattedValue
-                  );
-                  logInfo(`Replaced ${paramToken} with ${formattedValue}`);
-                  
-                  found = true;
-                  break; // Параметр найден, выходим из цикла полей
+                  logInfo(`Исправлено: заменен "id" = :userId на "id" = ${sqlValue}`);
+                  return fixedQuery;
                 }
               }
-              
-              if (found) break; // Параметр найден, выходим из цикла шагов
             }
-          }
-          
-          if (!found) {
-            logWarn(`Value for numeric parameter ${paramToken} (${param}) not found in any dependent step results.`);
           }
         }
       }
     }
     
-    // Затем обрабатываем именованные параметры
-    for (const param of parameters) {
-      // Ищем параметры вида :paramName или ${paramName}
-      const colonParam = `:${param}`;
+    if (!matchedParams || matchedParams.length === 0) {
+      // Дополнительная проверка на параметры в SQL
+      logInfo(`Проверка не обнаружила параметров в запросе`);
       
-      // Проверяем, есть ли такие параметры в запросе
-      if (!parameterizedQuery.includes(colonParam) && !parameterizedQuery.includes(`${param}}`)) {
-        continue;
+      // Ручная проверка для "трудных" случаев с параметрами
+      let hasManuallyDetectedParams = false;
+      for (const param of parameters) {
+        const patterns = [
+          `:${param}`,
+          `:\"${param}\"`,
+          `:"${param}"`,
+          `@${param}`,
+          `$${param}`,
+          `\${${param}}`
+        ];
+        
+        for (const pattern of patterns) {
+          if (sqlQuery.includes(pattern)) {
+            hasManuallyDetectedParams = true;
+            logInfo(`Ручное обнаружение нашло параметр ${pattern} в запросе`);
+            break;
+          }
+        }
+        
+        if (hasManuallyDetectedParams) break;
       }
       
-      // Ищем значение в зависимых шагах
-      let found = false;
-      for (const stepId of dependsOnSteps) {
-        const results = dependentResults[stepId];
+      if (!hasManuallyDetectedParams) {
+        // Ситуация: параметры указаны в step.parameters, но не найдены в SQL
+        // Это может быть ошибкой в генерации SQL или проблемой с форматированием
+        logWarn(`ВНИМАНИЕ: Параметры ${parameters.join(', ')} указаны для шага, но не найдены в SQL запросе.`);
+        logWarn(`SQL запрос: ${sqlQuery}`);
+        logWarn(`Это может привести к ошибкам выполнения!`);
         
-        if (results && results.length > 0) {
+        // Проверяем наличие символа ":" в запросе - это может указывать на наличие именованных параметров
+        if (sqlQuery.includes(':')) {
+          logWarn(`В SQL запросе найден символ ':' - возможно, это нестандартный формат параметра.`);
+          
+          // Пытаемся исправить наиболее очевидные случаи
+          for (const param of parameters) {
+            // Специальный случай: :"userId" - двоеточие перед кавычкой
+            if (sqlQuery.includes(`:"`) && sqlQuery.includes(param)) {
+              logInfo(`Обнаружен возможный параметр в формате :"${param}" - попытка исправить.`);
+              
+              // Получаем значение параметра из результатов предыдущих шагов
+              let paramValue: unknown = null;
+              
+              // Ищем значение в зависимых шагах
+              for (const stepId of dependsOnSteps) {
+                const results = dependentResults[stepId] || [];
+                
+                if (results.length > 0) {
+                  const firstRow = results[0];
+                  
+                  // Ищем поле с именем параметра (без учета регистра)
+                  for (const [key, value] of Object.entries(firstRow)) {
+                    if (key.toLowerCase() === param.toLowerCase()) {
+                      paramValue = value;
+                      const sqlValue = this.formatValueForSql(paramValue);
+                      
+                      // Ищем вхождения формата :"userId"
+                      const regex = new RegExp(`:"${param}"`, 'g');
+                      if (sqlQuery.match(regex)) {
+                        parameterizedQuery = sqlQuery.replace(regex, sqlValue);
+                        logInfo(`Исправлено: заменен :"${param}" на ${sqlValue}`);
+                        return parameterizedQuery;
+                      }
+                      
+                      // Ищем вхождения формата = :"userId"
+                      const equalsRegex = new RegExp(`=\\s*:"${param}"`, 'g');
+                      if (sqlQuery.match(equalsRegex)) {
+                        parameterizedQuery = sqlQuery.replace(equalsRegex, `= ${sqlValue}`);
+                        logInfo(`Исправлено: заменен = :"${param}" на = ${sqlValue}`);
+                        return parameterizedQuery;
+                      }
+                      
+                      break;
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        
+        logInfo(`Не найдены параметры в запросе. Возвращаем исходный запрос.`);
+        return sqlQuery;
+      }
+    } else {
+      logInfo(`Найдены параметры в запросе: ${matchedParams.join(', ')}`);
+    }
+    
+    // Заменяем параметры в запросе
+    for (const param of parameters) {
+      // Форматы параметров, которые мы ищем
+      const formats = [
+        `:${param}`,       // :userId
+        `:\"${param}\"`,   // :"userId"
+        `:"${param}"`,     // :"userId"
+        `@${param}`,       // @userId
+        `\${${param}}`,    // ${userId}
+        `$${param}`        // $userId
+      ];
+      
+      // Получаем значение параметра из результатов предыдущих шагов
+      let paramValue: unknown = null;
+      let found = false;
+      
+      // Ищем значение в зависимых шагах
+      for (const stepId of dependsOnSteps) {
+        const results = dependentResults[stepId] || [];
+        
+        if (results.length > 0) {
           const firstRow = results[0];
           
-          // Перебираем поля результата
+          // Ищем поле с именем параметра (без учета регистра)
           for (const [key, value] of Object.entries(firstRow)) {
-            // Проверяем соответствие имени параметра с учетом регистра
             if (key.toLowerCase() === param.toLowerCase()) {
-              const formattedValue = this.formatValueForSql(value);
-              logInfo(`Found value for parameter ${param} = ${formattedValue} in step ${stepId}`);
-              
-              // Заменяем параметр в SQL
-              if (parameterizedQuery.includes(colonParam)) {
-                parameterizedQuery = parameterizedQuery.replace(
-                  new RegExp(`:${param}\\b`, 'g'), 
-                  formattedValue
-                );
-                logInfo(`Replaced :${param} with ${formattedValue}`);
-              }
-              
-              if (parameterizedQuery.includes(`\${${param}}`)) {
-                parameterizedQuery = parameterizedQuery.replace(
-                  new RegExp(`\\$\\{${param}\\}`, 'g'), 
-                  formattedValue
-                );
-                logInfo(`Replaced \${${param}} with ${formattedValue}`);
-              }
-              
+              paramValue = value;
               found = true;
-              break; // Параметр найден, выходим из цикла полей
+              logInfo(`Found value for parameter ${param} = ${this.formatValueForSql(value)} in step ${stepId}`);
+              break;
             }
           }
           
-          if (found) break; // Параметр найден, выходим из цикла шагов
+          if (found) break;
         }
       }
       
       if (!found) {
         logWarn(`Value for parameter ${param} not found in any dependent step results.`);
+        continue;
+      }
+      
+      // Форматируем значение для SQL
+      const sqlValue = this.formatValueForSql(paramValue);
+      
+      // Заменяем все форматы параметра в запросе
+      for (const format of formats) {
+        // Экранируем специальные символы в формате
+        const escapedFormat = format.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        
+        // Создаем регулярное выражение для различных ситуаций
+        // 1. Для форматов с кавычками ищем точное совпадение
+        // 2. Для остальных форматов учитываем границы слов
+        const regex = format.includes('"') || format.includes("'") 
+          ? new RegExp(escapedFormat, 'g')
+          : new RegExp(`${escapedFormat}\\b`, 'g');
+        
+        if (parameterizedQuery.match(regex)) {
+          parameterizedQuery = parameterizedQuery.replace(regex, sqlValue);
+          logInfo(`Replaced ${format} with ${sqlValue}`);
+        }
+      }
+      
+      // Особый случай - :param внутри или после кавычек
+      // Например: = :"userId" или ="userId"
+      const colonQuotedParamRegex = new RegExp(`:"${param}"`, 'g');
+      if (parameterizedQuery.match(colonQuotedParamRegex)) {
+        parameterizedQuery = parameterizedQuery.replace(colonQuotedParamRegex, sqlValue);
+        logInfo(`Replaced :"${param}" with ${sqlValue}`);
+      }
+      
+      // Также проверяем числовые параметры ($1, $2)
+      const paramIndex = parameters.indexOf(param) + 1;
+      const numericParam = `$${paramIndex}`;
+      const numericRegex = new RegExp(`\\${numericParam}\\b`, 'g');
+      
+      if (parameterizedQuery.match(numericRegex)) {
+        parameterizedQuery = parameterizedQuery.replace(numericRegex, sqlValue);
+        logInfo(`Replaced numeric parameter ${numericParam} with ${sqlValue}`);
+      }
+
+      // Обработка "голых" параметров без экранирования
+      // Это запасной вариант, если все предыдущие проверки не сработали
+      // Есть риск замены не тех частей запроса, поэтому проверяем контекст
+      if (parameterizedQuery.includes(`:${param}`) || 
+          parameterizedQuery.includes(`:\"${param}\"`) ||
+          parameterizedQuery.includes(`:"${param}"`)) {
+        
+        // Простейшая эвристика: параметр после знака равенства
+        const whereClauseRegex = new RegExp(`=\\s*:["\']?${param}["\']?`, 'g');
+        if (parameterizedQuery.match(whereClauseRegex)) {
+          parameterizedQuery = parameterizedQuery.replace(whereClauseRegex, `= ${sqlValue}`);
+          logInfo(`Fallback: заменил параметр после знака равенства: =\\s*:["\']?${param}["\']? на = ${sqlValue}`);
+        }
       }
     }
     
