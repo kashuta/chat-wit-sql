@@ -3,6 +3,7 @@ import { logError, logInfo, logWarn, logDebug } from '@common/logger';
 import { resultStore } from '@common/result-store';
 import { DatabaseService } from '@common/types';
 import { executeSqlQuery } from './index';
+import { databaseKnowledge } from '@common/knowledge';
 
 /**
  * Интерфейс расширенного шага запроса с зависимостями
@@ -16,6 +17,8 @@ export interface QueryStepWithDependencies {
   parameters?: string[];          // Параметры, ожидаемые из других шагов 
   isInMemory: boolean;            // Обозначает шаг, который выполняется в памяти, а не в БД
   operation?: InMemoryOperation;  // Операция для шага в памяти
+  crossServiceReferences?: Array<{tableName: string, service: string}>; // References to tables in other services
+  crossServiceColumns?: Array<{columnName: string, sourceService: string, sourceTable: string}>;  // References to columns from other services
 }
 
 /**
@@ -72,13 +75,29 @@ export class DistributedQueryProcessor {
       logInfo(`Required services: ${plan.requiredServices.join(', ')}`);
       logInfo(`Final step ID: ${plan.finalStepId}`);
       
-      // Убедимся, что Redis подключен
-      await resultStore.connect().catch((err) => {
-        logWarn(`Could not connect to Redis: ${err.message}. Using in-memory fallback.`);
-      });
+      // Убедимся, что Redis подключен, но не выбрасываем исключение если не удалось
+      try {
+        // Проверяем, подключен ли уже Redis 
+        if (!resultStore.isConnected()) {
+          await resultStore.connect();
+        }
+      } catch (err) {
+        logWarn(`Could not connect to Redis: ${(err as Error).message}. Using in-memory fallback.`);
+      }
       
       // Очистка кеша от предыдущих результатов с этим ID
-      await resultStore.clear(planId);
+      try {
+        await resultStore.clear(planId);
+      } catch (err) {
+        logWarn(`Failed to clear previous results: ${(err as Error).message}. Continuing execution.`);
+      }
+      
+      // Валидация шагов на предмет ошибок в межсервисных запросах
+      const validationResult = this.validateServiceBoundaries(plan.steps);
+      if (!validationResult.isValid) {
+        logError(`Plan validation failed: ${validationResult.error}`);
+        throw new Error(validationResult.error);
+      }
       
       // Создаём граф зависимостей для шагов
       const dependencyGraph = this.buildDependencyGraph(plan.steps);
@@ -151,6 +170,24 @@ export class DistributedQueryProcessor {
               // Общая замена для неэкранированного userId
               // Используем регулярное выражение для замены userId как отдельного слова
               sqlQuery = sqlQuery.replace(/\b(userId)\b(?!")/g, '"userId"');
+            }
+            
+            // Validate the SQL query against the schema
+            const schemaValidation = this.validateSqlAgainstSchema(step.service, sqlQuery);
+            if (!schemaValidation.isValid) {
+              logWarn(`Schema validation error: ${schemaValidation.error}`);
+              logInfo(`Attempting to fix SQL query...`);
+              
+              // Try to automatically fix common issues
+              sqlQuery = this.attemptSqlFix(step.service, sqlQuery);
+              
+              // Validate again after fixing
+              const revalidation = this.validateSqlAgainstSchema(step.service, sqlQuery);
+              if (!revalidation.isValid) {
+                throw new Error(`Schema validation failed: ${revalidation.error}`);
+              }
+              
+              logInfo(`SQL query fixed: ${sqlQuery}`);
             }
             
             // Создаем параметризованный SQL запрос с подстановкой значений из предыдущих шагов
@@ -764,6 +801,324 @@ export class DistributedQueryProcessor {
     return plan.steps.some(step => step.dependsOn.includes(stepId));
   }
   
+  /**
+   * Attempts to fix common SQL schema issues
+   */
+  private attemptSqlFix(service: DatabaseService, sqlQuery: string): string {
+    let fixedQuery = sqlQuery;
+    
+    // Get database description
+    const dbDescription = databaseKnowledge.getDatabaseDescription(service);
+    if (!dbDescription) {
+      return fixedQuery;
+    }
+    
+    // Extract table references
+    const tableRegex = /\bFROM\s+"?([A-Za-z0-9_]+)"?/gi;
+    const joinRegex = /\bJOIN\s+"?([A-Za-z0-9_]+)"?/gi;
+    
+    const tables: string[] = [];
+    let match: RegExpExecArray | null;
+    
+    while ((match = tableRegex.exec(sqlQuery)) !== null) {
+      tables.push(match[1]);
+    }
+    
+    while ((match = joinRegex.exec(sqlQuery)) !== null) {
+      tables.push(match[1]);
+    }
+    
+    // Fix 1: Invalid table names - try to find similar tables
+    for (const tableName of tables) {
+      const tableExists = dbDescription.tables.some(t => 
+        t.name.toLowerCase() === tableName.toLowerCase()
+      );
+      
+      if (!tableExists) {
+        // Try to find a similar table name
+        const similarTables = dbDescription.tables
+          .filter(t => this.calculateSimilarity(t.name.toLowerCase(), tableName.toLowerCase()) > 0.7)
+          .sort((a, b) => 
+            this.calculateSimilarity(b.name.toLowerCase(), tableName.toLowerCase()) - 
+            this.calculateSimilarity(a.name.toLowerCase(), tableName.toLowerCase())
+          );
+        
+        if (similarTables.length > 0) {
+          const correctTableName = similarTables[0].name;
+          logInfo(`Replacing invalid table name "${tableName}" with similar table "${correctTableName}"`);
+          
+          // Replace the table name in FROM clause
+          fixedQuery = fixedQuery.replace(
+            new RegExp(`\\bFROM\\s+"?${tableName}"?\\b`, 'gi'), 
+            `FROM "${correctTableName}"`
+          );
+          
+          // Replace the table name in JOIN clause
+          fixedQuery = fixedQuery.replace(
+            new RegExp(`\\bJOIN\\s+"?${tableName}"?\\b`, 'gi'), 
+            `JOIN "${correctTableName}"`
+          );
+        }
+      }
+    }
+    
+    // Fix 2: Unquoted identifiers - add quotes to all column references
+    const columnReferencePatterns = [
+      /\bSELECT\s+(.*?)\s+FROM\b/gi,
+      /\bWHERE\s+(.*?)\s+(?:GROUP BY|ORDER BY|LIMIT|$)/gi,
+      /\bORDER\s+BY\s+(.*?)(?:LIMIT|$)/gi,
+      /\bGROUP\s+BY\s+(.*?)(?:HAVING|ORDER BY|LIMIT|$)/gi
+    ];
+    
+    for (const pattern of columnReferencePatterns) {
+      fixedQuery = fixedQuery.replace(pattern, (match, clauseContent) => {
+        // Split by commas for multi-column clauses
+        const columns = clauseContent.split(',');
+        
+        // Process each column
+        const fixedColumns = columns.map((column: string) => {
+          // Skip if already quoted or contains functions
+          if (column.includes('"') || 
+              column.includes('(') || 
+              column.includes('*') ||
+              column.trim() === '') {
+            return column;
+          }
+          
+          // Add quotes to simple identifiers
+          return column.replace(/\b([A-Za-z0-9_]+)\b/g, '"$1"');
+        });
+        
+        // Rebuild the clause
+        return match.replace(clauseContent, fixedColumns.join(','));
+      });
+    }
+    
+    // Fix 3: Ensure proper capitalization of column names
+    for (const tableName of tables) {
+      const tableDescription = dbDescription.tables.find(t => 
+        t.name.toLowerCase() === tableName.toLowerCase()
+      );
+      
+      if (tableDescription) {
+        for (const column of tableDescription.columns) {
+          // Replace incorrect case with correct case
+          const columnRegex = new RegExp(`"${column.name.toLowerCase()}"`, 'gi');
+          fixedQuery = fixedQuery.replace(columnRegex, `"${column.name}"`);
+        }
+      }
+    }
+    
+    return fixedQuery;
+  }
+  
+  /**
+   * Calculate string similarity (Levenshtein distance)
+   */
+  private calculateSimilarity(a: string, b: string): number {
+    if (a.length === 0) return b.length;
+    if (b.length === 0) return a.length;
+    
+    const matrix: number[][] = [];
+    
+    // Initialize matrix
+    for (let i = 0; i <= b.length; i++) {
+      matrix[i] = [i];
+    }
+    
+    for (let i = 0; i <= a.length; i++) {
+      matrix[0][i] = i;
+    }
+    
+    // Fill matrix
+    for (let i = 1; i <= b.length; i++) {
+      for (let j = 1; j <= a.length; j++) {
+        const cost = a[j - 1] === b[i - 1] ? 0 : 1;
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j] + 1,      // deletion
+          matrix[i][j - 1] + 1,      // insertion
+          matrix[i - 1][j - 1] + cost // substitution
+        );
+      }
+    }
+    
+    // Calculate similarity as a value between 0 and 1
+    const maxLength = Math.max(a.length, b.length);
+    const distance = matrix[b.length][a.length];
+    return 1 - distance / maxLength;
+  }
+  
+  /**
+   * Validates an SQL query against the service schema
+   */
+  private validateSqlAgainstSchema(
+    service: DatabaseService,
+    sqlQuery: string
+  ): { isValid: boolean; error?: string } {
+    if (!databaseKnowledge.isLoaded()) {
+      logWarn("Database knowledge not loaded, skipping schema validation");
+      return { isValid: true };
+    }
+    
+    // Get the database description
+    const dbDescription = databaseKnowledge.getDatabaseDescription(service);
+    if (!dbDescription) {
+      logWarn(`No schema information available for service ${service}, skipping validation`);
+      return { isValid: true };
+    }
+    
+    // Extract table references from the query
+    const tableRegex = /\bFROM\s+"?([A-Za-z0-9_]+)"?/gi;
+    const joinRegex = /\bJOIN\s+"?([A-Za-z0-9_]+)"?/gi;
+    
+    const tables: string[] = [];
+    let match: RegExpExecArray | null;
+    
+    while ((match = tableRegex.exec(sqlQuery)) !== null) {
+      tables.push(match[1]);
+    }
+    
+    while ((match = joinRegex.exec(sqlQuery)) !== null) {
+      tables.push(match[1]);
+    }
+    
+    // Validate each referenced table exists in the schema
+    for (const tableName of tables) {
+      const tableDescription = dbDescription.tables.find(t => 
+        t.name.toLowerCase() === tableName.toLowerCase()
+      );
+      
+      if (!tableDescription) {
+        return {
+          isValid: false,
+          error: `Table "${tableName}" not found in service "${service}" schema`
+        };
+      }
+      
+      // Extract column references for this table
+      const columnRegex = new RegExp(`"?${tableName}"?\\."?([A-Za-z0-9_]+)"?`, 'gi');
+      const columns: string[] = [];
+      
+      while ((match = columnRegex.exec(sqlQuery)) !== null) {
+        columns.push(match[1]);
+      }
+      
+      // Also look for column references without table qualifier in SELECT, WHERE, ORDER BY, etc.
+      const columnPatterns = [
+        /\bSELECT\s+(?:.*?)(?:,\s*)?([A-Za-z0-9_]+)(?:\s|,|$)/gi,
+        /\bWHERE\s+(?:.*?[=><])\s*([A-Za-z0-9_]+)(?:\s|$)/gi,
+        /\bWHERE\s+([A-Za-z0-9_]+)\s*(?:[=><])/gi,
+        /\bORDER\s+BY\s+([A-Za-z0-9_]+)/gi,
+        /\bGROUP\s+BY\s+([A-Za-z0-9_]+)/gi
+      ];
+      
+      for (const pattern of columnPatterns) {
+        while ((match = pattern.exec(sqlQuery)) !== null) {
+          if (!columns.includes(match[1])) {
+            columns.push(match[1]);
+          }
+        }
+      }
+      
+      // Validate each referenced column exists in the table
+      // Skip validation for * (SELECT *)
+      for (const columnName of columns) {
+        if (columnName === '*') continue;
+        
+        const columnExists = tableDescription.columns.some(c => 
+          c.name.toLowerCase() === columnName.toLowerCase()
+        );
+        
+        if (!columnExists) {
+          return {
+            isValid: false,
+            error: `Column "${columnName}" not found in table "${tableName}" of service "${service}"`
+          };
+        }
+      }
+    }
+    
+    return { isValid: true };
+  }
+
+  /**
+   * Validates that all steps respect service boundaries and that cross-service references are handled properly
+   */
+  private validateServiceBoundaries(steps: QueryStepWithDependencies[]): { isValid: boolean; error?: string } {
+    for (const step of steps) {
+      // Skip validation for in-memory steps
+      if (step.isInMemory) {
+        continue;
+      }
+      
+      // Skip steps without SQL queries
+      if (!step.sqlQuery) {
+        continue;
+      }
+      
+      // Check if the step has cross-service column references that haven't been properly transformed
+      if (step.crossServiceColumns && step.crossServiceColumns.length > 0) {
+        for (const columnRef of step.crossServiceColumns) {
+          const { columnName, sourceService, sourceTable } = columnRef;
+          
+          // Check if this column is being directly referenced in the SQL without proper transformation
+          const columnRegex = new RegExp(`\\b${columnName}\\b`, 'i');
+          
+          if (columnRegex.test(step.sqlQuery)) {
+            // Check that this step depends on another step that retrieves this data
+            const hasDependentStep = steps.some(otherStep => 
+              otherStep.service === sourceService && 
+              otherStep.sqlQuery && 
+              otherStep.sqlQuery.includes(sourceTable) &&
+              step.dependsOn.includes(otherStep.id)
+            );
+            
+            if (!hasDependentStep) {
+              return {
+                isValid: false,
+                error: `Step ${step.id} directly references column ${columnName} from service ${sourceService} without a proper dependent step for data retrieval.`
+              };
+            }
+            
+            // Check if the column is used as a parameter
+            const isParameter = step.parameters && step.parameters.some(param => 
+              param.toLowerCase() === columnName.toLowerCase()
+            );
+            
+            if (!isParameter) {
+              return {
+                isValid: false,
+                error: `Step ${step.id} uses cross-service column ${columnName} without listing it as a parameter.`
+              };
+            }
+          }
+        }
+      }
+      
+      // For table-level cross-service references, ensure they are properly handled
+      if (step.crossServiceReferences && step.crossServiceReferences.length > 0) {
+        for (const tableRef of step.crossServiceReferences) {
+          const { tableName, service } = tableRef;
+          
+          // Simple check: if the table is referenced directly, it should be a parameter or a subquery
+          const directTableRegex = new RegExp(`\\bFROM\\s+"?${tableName}"?\\b`, 'i');
+          const joinTableRegex = new RegExp(`\\bJOIN\\s+"?${tableName}"?\\b`, 'i');
+          
+          if ((directTableRegex.test(step.sqlQuery) || joinTableRegex.test(step.sqlQuery)) && 
+              service !== step.service) {
+            // This is a direct reference to a table from another service without transformation
+            return {
+              isValid: false,
+              error: `Step ${step.id} directly references table ${tableName} from service ${service} without transformation.`
+            };
+          }
+        }
+      }
+    }
+    
+    return { isValid: true };
+  }
+
   /**
    * Создает новый распределенный план запроса
    */

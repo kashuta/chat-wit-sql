@@ -2,7 +2,7 @@
  * SQL assistant initialization
  */
 import path from 'path';
-import { logError, logInfo } from './logger';
+import { logError, logInfo, logWarn } from './logger';
 import { databaseKnowledge } from './knowledge';
 import { resultStore } from './result-store';
 
@@ -19,11 +19,16 @@ export const initialize = async (): Promise<void> => {
     
     // Тестируем подключение к Redis
     try {
-      await resultStore.connect();
-      logInfo('Redis connection established for query results storage');
+      // Проверяем, подключен ли уже Redis
+      if (!resultStore.isConnected()) {
+        await resultStore.connect();
+        logInfo('Redis connection established for query results storage');
+      } else {
+        logInfo('Redis already connected for query results storage');
+      }
     } catch (error) {
       logError(`Failed to connect to Redis: ${(error as Error).message}`);
-      logInfo('Will use fallback in-memory storage for query results');
+      logWarn('Will use fallback in-memory storage for query results');
     }
     
     logInfo('SQL assistant initialized.');
@@ -42,8 +47,10 @@ export const shutdown = async (): Promise<void> => {
     
     // Закрываем соединение с Redis
     try {
-      await resultStore.disconnect();
-      logInfo('Redis connection closed');
+      if (resultStore.isConnected()) {
+        await resultStore.disconnect();
+        logInfo('Redis connection closed');
+      }
     } catch (error) {
       logError(`Error disconnecting from Redis: ${(error as Error).message}`);
     }
