@@ -862,6 +862,9 @@ export class DistributedQueryProcessor {
       }
     }
     
+    // SQL ключевые слова, которые никогда не должны заключаться в кавычки
+    const sqlKeywords = ['SELECT', 'FROM', 'WHERE', 'JOIN', 'GROUP', 'ORDER', 'BY', 'HAVING', 'LIMIT', 'OFFSET', 'AS', 'ON', 'AND', 'OR', 'NOT', 'IN', 'IS', 'NULL', 'TRUE', 'FALSE', 'ASC', 'DESC', 'INNER', 'OUTER', 'LEFT', 'RIGHT', 'FULL', 'DISTINCT', 'ALL', 'BETWEEN', 'LIKE', 'ILIKE', 'SIMILAR', 'TO'];
+    
     // Fix 2: Unquoted identifiers - add quotes to all column references
     const columnReferencePatterns = [
       /\bSELECT\s+(.*?)\s+FROM\b/gi,
@@ -885,8 +888,13 @@ export class DistributedQueryProcessor {
             return column;
           }
           
-          // Add quotes to simple identifiers
-          return column.replace(/\b([A-Za-z0-9_]+)\b/g, '"$1"');
+          // Добавляем кавычки к идентификаторам, но не к ключевым словам SQL
+          return column.replace(/\b([A-Za-z0-9_]+)\b/g, (match, word) => {
+            if (sqlKeywords.includes(word.toUpperCase())) {
+              return word; // Возвращаем ключевое слово без кавычек
+            }
+            return `"${word}"`; // Добавляем кавычки к идентификатору
+          });
         });
         
         // Rebuild the clause
@@ -908,6 +916,12 @@ export class DistributedQueryProcessor {
         }
       }
     }
+    
+    // Fix 4: Удаляем кавычки вокруг ключевых слов SQL
+    sqlKeywords.forEach(keyword => {
+      const keywordRegex = new RegExp(`"${keyword}"`, 'gi');
+      fixedQuery = fixedQuery.replace(keywordRegex, keyword);
+    });
     
     return fixedQuery;
   }
@@ -967,6 +981,9 @@ export class DistributedQueryProcessor {
       return { isValid: true };
     }
     
+    // SQL ключевые слова, которые всегда нужно игнорировать при валидации
+    const sqlKeywords = ['SELECT', 'FROM', 'WHERE', 'JOIN', 'GROUP', 'ORDER', 'BY', 'HAVING', 'LIMIT', 'OFFSET', 'AS', 'ON', 'AND', 'OR', 'NOT', 'IN', 'IS', 'NULL', 'TRUE', 'FALSE', 'ASC', 'DESC', 'INNER', 'OUTER', 'LEFT', 'RIGHT', 'FULL', 'DISTINCT', 'ALL', 'BETWEEN', 'LIKE', 'ILIKE', 'SIMILAR', 'TO'];
+    
     // Extract table references from the query
     const tableRegex = /\bFROM\s+"?([A-Za-z0-9_]+)"?/gi;
     const joinRegex = /\bJOIN\s+"?([A-Za-z0-9_]+)"?/gi;
@@ -1015,7 +1032,6 @@ export class DistributedQueryProcessor {
       for (const pattern of columnPatterns) {
         while ((match = pattern.exec(sqlQuery)) !== null) {
           // Пропускаем SQL ключевые слова
-          const sqlKeywords = ['SELECT', 'FROM', 'WHERE', 'JOIN', 'GROUP', 'ORDER', 'BY', 'HAVING', 'LIMIT', 'OFFSET', 'AS'];
           if (!sqlKeywords.includes(match[1].toUpperCase()) && !columns.includes(match[1])) {
             columns.push(match[1]);
           }
@@ -1026,6 +1042,9 @@ export class DistributedQueryProcessor {
       // Skip validation for * (SELECT *)
       for (const columnName of columns) {
         if (columnName === '*') continue;
+        
+        // Пропускаем SQL ключевые слова при проверке колонок
+        if (sqlKeywords.includes(columnName.toUpperCase())) continue;
         
         const columnExists = tableDescription.columns.some(c => 
           c.name.toLowerCase() === columnName.toLowerCase()
