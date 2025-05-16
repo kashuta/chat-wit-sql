@@ -52,6 +52,10 @@ cp .env.example .env
 ```
 # OpenAI
 OPENAI_API_KEY=your_openai_api_key
+OPENAI_MODEL=gpt-4.1-mini    # Или другая модель
+
+# Логирование
+LOG_LEVEL=info    # debug, info, warn, error
 
 # Redis
 REDIS_URL=redis://localhost:6379
@@ -64,6 +68,15 @@ DB_USER_WALLET=postgres
 DB_PASSWORD_WALLET=postgres
 
 # Аналогично настройте для других сервисов
+DB_HOST_PAM=localhost
+DB_PORT_PAM=5433
+DB_NAME_PAM=pam
+DB_USER_PAM=postgres
+DB_PASSWORD_PAM=postgres
+
+# Настройки разрешения конфликтов
+CONFLICT_RESOLUTION_ENABLED=true
+CONFLICT_LLM_MODEL=gpt-4.1-mini
 ```
 
 #### 3.2. Запуск Redis и БД в Docker (опционально)
@@ -76,6 +89,12 @@ docker run --name redis -p 6379:6379 -d redis:6.2
 
 # Запуск PostgreSQL (пример для одной БД)
 docker run --name postgres -p 5432:5432 -e POSTGRES_PASSWORD=postgres -d postgres:14
+```
+
+Для запуска всех необходимых сервисов с помощью Docker Compose, используйте:
+
+```bash
+docker-compose up -d
 ```
 
 ### 4. Генерация Prisma-клиентов
@@ -94,6 +113,18 @@ npm run prisma:introspect:all
 # Или для отдельных сервисов
 npm run prisma:introspect:wallet
 npm run prisma:introspect:bets
+```
+
+### 6. Инициализация модуля разрешения конфликтов
+
+Для корректной работы модуля разрешения конфликтов между сервисами:
+
+```bash
+# Генерация карты схем баз данных для детектора конфликтов
+npm run conflicts:generate-schema-map
+
+# Проверка и валидация конфигурации
+npm run conflicts:validate
 ```
 
 ## Запуск системы
@@ -132,6 +163,34 @@ npm run build
 npm start
 ```
 
+## Архитектура системы
+
+Система состоит из четырех основных модулей:
+
+1. **Модуль восприятия (Perception)** - анализирует запросы на естественном языке
+2. **Модуль планирования (Planning)** - создает план выполнения SQL-запросов
+3. **Модуль разрешения конфликтов (Conflict Resolution)** - обнаруживает и разрешает конфликты между таблицами с одинаковыми именами в разных сервисах
+4. **Модуль выполнения (Execution)** - выполняет запросы к базам данных и обрабатывает результаты
+
+### Настройка модуля разрешения конфликтов
+
+Модуль разрешения конфликтов можно настроить через конфигурационный файл:
+
+```bash
+cp backend/packages/conflict-resolution/config.example.json backend/packages/conflict-resolution/config.json
+```
+
+Основные параметры:
+
+```json
+{
+  "conflictDetectionThreshold": 0.7,  // Порог для определения конфликта (0.0-1.0)
+  "useCache": true,                   // Использовать ли кэширование для повышения производительности
+  "detectionMode": "AUTO",            // AUTO, MANUAL или DISABLED
+  "resolverModel": "gpt-4.1-mini"     // Модель для разрешения конфликтов
+}
+```
+
 ## Тестирование
 
 ### Выполнение тестов
@@ -142,6 +201,9 @@ npm test
 
 # Запуск тестов с режимом watch
 npm run test:watch
+
+# Запуск тестов для модуля разрешения конфликтов
+npm run test:conflicts
 ```
 
 ### Ручное тестирование API
@@ -191,9 +253,33 @@ npm run prisma:studio
 
 2. Если соединения нестабильны, увеличьте таймауты подключения в файле `backend/packages/common/prisma-pool.ts`
 
+### Проблемы с параметрами SQL-запросов
+
+Если вы видите ошибки синтаксиса SQL при выполнении запросов с параметрами:
+
+1. Проверьте, что модуль execution правильно обрабатывает параметры (подробнее в `backend/packages/execution/distributed-query.ts`)
+2. Убедитесь, что формат параметров в SQL соответствует одному из поддерживаемых:
+   - `:paramName`
+   - `$1, $2, ...` (позиционные параметры PostgreSQL)
+   - `@paramName`
+   - `${paramName}` (формат шаблонной строки)
+
+### Проблемы с разрешением конфликтов
+
+1. Убедитесь, что для каждой таблицы, участвующей в конфликте, определена стратегия разрешения:
+   ```bash
+   npm run conflicts:check-tables
+   ```
+
+2. Проверьте журнал с информацией о разрешении конфликтов:
+   ```bash
+   npm run conflicts:show-logs
+   ```
+
 ## Дополнительные команды
 
 - `npm run lint` - Запуск линтера для проверки кода
 - `npm run lint:fix` - Автоматическое исправление ошибок линтера
 - `npm run format` - Форматирование кода с помощью Prettier
-- `npm run clean` - Очистка сборочных директорий 
+- `npm run clean` - Очистка сборочных директорий
+- `npm run conflicts:demo` - Запуск демонстрации работы модуля разрешения конфликтов 
