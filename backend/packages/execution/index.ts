@@ -2,48 +2,33 @@ import { z } from 'zod';
 import { QueryPlan, QueryResponse, DatabaseService, ErrorType } from '@common/types';
 import { createTypedError } from '@common/utils';
 import { getOpenAIModel, createOutputParser } from '@common/llm';
+import { executeSqlQuery as dbExecuteSqlQuery } from '@execution/database';
 
 /**
- * Mock function to execute SQL queries (to be replaced with actual DB connection)
- * @param service - Database service to query
- * @param query - SQL query to execute
- * @returns Query results as an array of objects
+ * Executes an SQL query with error handling and logging
+ * @param service - Database service 
+ * @param query - SQL query
+ * @returns Query results
  */
 export const executeSqlQuery = async (
   service: DatabaseService, 
   query: string
 ): Promise<Record<string, unknown>[]> => {
-  // This is a mock implementation
+  // Calling the actual database connection instead of a mock
   console.log(`Executing SQL query on ${service}: ${query}`);
   
-  // Return mock data based on the service
-  switch (service) {
-    case 'wallet':
-      return [
-        { userId: 1, balance: 1000, currency: 'USD' },
-        { userId: 2, balance: 2500, currency: 'EUR' },
-        { userId: 3, balance: 500, currency: 'USD' },
-      ];
-    case 'bets-history':
-      return [
-        { userId: 1, betAmount: 100, gameType: 'slots', timestamp: new Date().toISOString() },
-        { userId: 2, betAmount: 50, gameType: 'poker', timestamp: new Date().toISOString() },
-        { userId: 3, betAmount: 200, gameType: 'sports', timestamp: new Date().toISOString() },
-      ];
-    case 'user-activities':
-      return [
-        { userId: 1, action: 'login', timestamp: new Date().toISOString() },
-        { userId: 2, action: 'deposit', timestamp: new Date().toISOString() },
-        { userId: 3, action: 'bet', timestamp: new Date().toISOString() },
-      ];
-    case 'financial-history':
-      return [
-        { userId: 1, amount: 500, type: 'deposit', timestamp: new Date().toISOString() },
-        { userId: 2, amount: 100, type: 'withdrawal', timestamp: new Date().toISOString() },
-        { userId: 3, amount: 1000, type: 'deposit', timestamp: new Date().toISOString() },
-      ];
-    default:
-      return [];
+  try {
+    // Using the actual database connection instead of a mock
+    const result = await dbExecuteSqlQuery({ 
+      service, 
+      query 
+    });
+    console.log(`SQL query executed successfully`);
+    console.log(`Result: ${JSON.stringify(result)}`);
+    return result;
+  } catch (error) {
+    console.error(`Error executing SQL: ${(error as Error).message}`);
+    throw error;
   }
 };
 
@@ -64,6 +49,18 @@ type ExecutionOutput = z.infer<typeof executionResultSchema>;
  */
 const SYSTEM_PROMPT = `You are an AI assistant specialized in interpreting SQL query results for a sports betting and casino platform called Dante.
 Your task is to analyze the query results and provide insights, explanation, and visualization recommendations.
+
+IMPORTANT BEHAVIOR WITH COUNT QUERIES:
+1. When interpreting results of COUNT(*) queries, always check if the result contains a numeric value
+2. Pay special attention to the "count" field that is often returned by SQL COUNT(*) queries
+3. COUNT(*) queries return the total count as a number, even when it's 0
+
+Example: For a query "SELECT COUNT(*) FROM Users", the results might be:
+- [{"count": 128}] - This means there are 128 users in the database
+- [{"count": 0}] - This means there are 0 users in the database
+- [] - Empty array indicating no results were returned (error or no access)
+
+Be careful not to misinterpret empty result sets from COUNT queries - they are not the same as a count of 0!
 
 Respond with:
 - explanation: Clear explanation of the data and any insights derived
@@ -101,8 +98,16 @@ export const executeQueryPlan = async (
       }
       
       executedQueries.push(`/* ${step.service} */\n${step.sqlQuery}`);
-      const result = await executeSqlQuery(step.service, step.sqlQuery);
-      stepResults[step.service] = result;
+      try {
+        console.log(`Executing step for ${step.service}: ${step.sqlQuery}`);
+        const result = await executeSqlQuery(step.service, step.sqlQuery);
+        console.log(`Step result for ${step.service}: ${JSON.stringify(result)}`);
+        stepResults[step.service] = result;
+      } catch (queryError) {
+        console.error(`Error executing step for ${step.service}: ${(queryError as Error).message}`);
+        // Continue with other steps even if one fails
+        stepResults[step.service] = [{ error: (queryError as Error).message }];
+      }
     }
     
     if (Object.keys(stepResults).length === 0) {
@@ -117,15 +122,18 @@ export const executeQueryPlan = async (
     const parser = createOutputParser(executionResultSchema);
     
     const sqlQueriesStr = executedQueries.join('\n\n');
+    console.log('=== QUERY RESULTS BEFORE SENDING TO LLM ===');
+    console.log(JSON.stringify(stepResults, null, 2));
+    console.log('=== END QUERY RESULTS ===');
     const resultsStr = JSON.stringify(stepResults, null, 2);
     
-    // Системное сообщение
+    // System message
     const systemMessage = {
       role: 'system',
       content: SYSTEM_PROMPT
     };
     
-    // Пользовательское сообщение
+    // User message
     const userMessage = {
       role: 'user',
       content: `User query: ${query}
@@ -139,7 +147,7 @@ ${resultsStr}
 Please interpret these results.`
     };
     
-    // Формируем сообщения для модели
+    // Prepare messages for the model
     const messages = [systemMessage, userMessage];
     
     const response = await model.invoke(messages);

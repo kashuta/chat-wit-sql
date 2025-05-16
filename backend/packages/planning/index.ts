@@ -1,11 +1,59 @@
 import { z } from 'zod';
+import fs from 'fs';
+import path from 'path';
 import { QueryPlan, DatabaseService, PerceptionResult } from '@common/types';
 import { getOpenAIModel, createOutputParser } from '@common/llm';
 import { databaseKnowledge } from '@common/knowledge';
 
 /**
- * Schema for query plan output validation
+ * Loads SQL instructions from a file
+ * @returns String with instructions
  */
+const loadSqlGuidelines = (): string => {
+  try {
+    const guidePath = path.join(process.cwd(), 'data', 'sql-guidelines.json');
+    if (!fs.existsSync(guidePath)) {
+      console.warn('SQL guidelines file not found:', guidePath);
+      return '';
+    }
+    
+    const guideContent = fs.readFileSync(guidePath, 'utf-8');
+    const guidelines = JSON.parse(guideContent);
+    
+    let result = 'IMPORTANT RULES FOR POSTGRESQL:\n\n';
+    
+    if (guidelines.postgresqlGuidelines) {
+      // Add rules
+      for (const rule of guidelines.postgresqlGuidelines) {
+        result += `### ${rule.rule}\n`;
+        if (rule.example) {
+          result += `Example: ${rule.example}\n`;
+        }
+        if (rule.explanation) {
+          result += `${rule.explanation}\n`;
+        }
+        if (rule.tablesRequiringQuotes) {
+          result += 'Tables requiring quotes:\n';
+          for (const table of rule.tablesRequiringQuotes) {
+            result += `- ${table.service}.${table.table} → use ${table.correctUsage}\n`;
+          }
+        }
+        if (rule.queries) {
+          result += 'Diagnostic queries:\n';
+          for (const query of rule.queries) {
+            result += `- ${query.description}: \`${query.query}\`\n`;
+          }
+        }
+        result += '\n';
+      }
+    }
+    
+    return result;
+  } catch (error) {
+    console.warn('Failed to load SQL guidelines:', error);
+    return '';
+  }
+};
 const queryPlanSchema = z.object({
   steps: z.array(
     z.object({
@@ -54,8 +102,10 @@ type PlanningOutput = z.infer<typeof queryPlanSchema>;
  * System prompt for the planning module
  */
 const getSystemPrompt = (): string => {
+  const sqlGuidelines = loadSqlGuidelines();
+  
   const basePrompt = `You are an AI assistant specialized in planning SQL queries for a sports betting and casino platform called Dante.
-Your task is to plan the steps needed to answer the user's query efficiently.
+Your task is to plan the steps needed to answer the user's query efficiently, strictly adhering to the provided database schema.
 
 ${databaseKnowledge.isLoaded() ? databaseKnowledge.getDetailedDatabaseDescriptionsForLLM() : `
 Available database services:
@@ -74,16 +124,36 @@ Available database services:
 - traffic: Contains traffic tracking and analysis data
 `}
 
-For each service, you need to specify:
-1. Which service to query
-2. A description of what information to retrieve from that service
-3. Optionally, a draft SQL query to use (this will be refined later)
+${sqlGuidelines}
+
+IMPORTANT DATABASE SELECTION RULES:
+1. The 'pam' service is THE MAIN DATABASE for user information - it contains the primary "User" table with ALL registered users. ALWAYS use 'pam' for user-centric queries.
+2. ALWAYS USE 'pam' service for any queries about user counts, user lists, or general user information. Target the "User" table for this.
+3. For counting total users, always use: SELECT COUNT(*) FROM "User" in the pam service (or the exact table name for users specified in the schema if different).
+
+IMPORTANT POSTGRESQL SYNTAX AND SCHEMA ADHERENCE RULES:
+1. SQL Generation: When drafting SQL queries, you MUST use the EXACT table and column names provided in the schema description (loaded from database-descriptions.json). Do not invent or assume column names.
+2. Case Sensitivity: PostgreSQL can be case-sensitive. If table or column names in the schema description are enclosed in double quotes (e.g., "User", "createdAt"), they MUST be used with quotes and the exact case in the SQL query. If they are not quoted in the schema, use them as is, respecting their original case.
+3. Date Columns: For queries involving dates (e.g., registrations today, transactions last week), meticulously check the schema for the correct date column names for each relevant table (e.g., 'created_at', 'user_registered_at'). DO NOT use generic names like 'date' or 'registration_date' unless that exact name is specified in the schema for that table.
+4. Keywords: Capitalize SQL keywords (SELECT, FROM, WHERE, etc.) for clarity.
+5. Intervals: Use proper PostgreSQL date/interval syntax: NOW() - INTERVAL '7 days'.
+6. Quoting Table Names: If a table name in the schema description starts with an uppercase letter or contains special characters (e.g., "User"), it almost certainly requires double quotes in PostgreSQL: SELECT * FROM "User". Follow the schema's examples if available.
+
+IMPORTANT: USING THE USER TABLE (from 'pam' service for user data):
+When planning queries related to users (e.g., count, list, details, registration dates):
+- Always target the 'pam' service and its main user table (typically "User", but verify with the schema).
+- For user registration dates, specifically look up the column name in the schema for the "User" table (it might be 'created_at', 'registered_at', or similar). Do not assume 'registration_date'.
+
+For each step in the plan, you need to specify:
+1. Which service to query (from the available list).
+2. A description of what information to retrieve from that service.
+3. Optionally, a draft SQL query. If you provide a query, it MUST strictly follow the schema rules above.
 
 Respond with:
-- steps: Array of steps to execute
-- requiredServices: Array of database services needed (should match the services in steps)
+- steps: Array of steps to execute.
+- requiredServices: Array of database services needed (should match the services in steps).
 
-You MUST only use the available database services listed above.
+You MUST only use the available database services listed and described.
 
 IMPORTANT: You must respond with a valid JSON object. Your response must be ONLY valid JSON without any text before or after it.
 Example response format:
@@ -91,8 +161,8 @@ Example response format:
   "steps": [
     {
       "service": "financial-history",
-      "description": "Count deposits made in the last week",
-      "sqlQuery": "SELECT COUNT(*) FROM deposits WHERE deposit_date >= NOW() - INTERVAL '7 days'"
+      "description": "Count deposits made in the last week using the correct date column from schema",
+      "sqlQuery": "SELECT COUNT(*) FROM \"Transaction\" WHERE \"type\" = 'DEPOSIT' AND \"created_at\"::date >= (NOW() - INTERVAL '7 days')::date" // Assumes Transaction table and created_at column from schema
     }
   ],
   "requiredServices": ["financial-history"]
@@ -119,13 +189,13 @@ export const createQueryPlan = async (
     const entitiesStr = JSON.stringify(entities);
     const servicesStr = JSON.stringify(requiredServices);
     
-    // Системное сообщение
+    // System message
     const systemMessage = {
       role: 'system',
       content: getSystemPrompt()
     };
     
-    // Пользовательское сообщение
+    // User message
     const userMessage = {
       role: 'user',
       content: `User query: ${query}
@@ -137,7 +207,7 @@ Extracted entities: ${entitiesStr}
 Please create a plan to answer this query.`
     };
     
-    // Формируем сообщения для модели
+    // Prepare messages for the model
     const messages = [systemMessage, userMessage];
     
     const response = await model.invoke(messages);
@@ -165,7 +235,7 @@ Please create a plan to answer this query.`
       steps: perceptionResult.requiredServices.map(service => {
         let defaultQuery: string;
         
-        // Дефолтные запросы для каждого сервиса
+        // Default queries for each service
         switch(service) {
           case 'wallet':
             defaultQuery = 'SELECT * FROM wallets LIMIT 10';

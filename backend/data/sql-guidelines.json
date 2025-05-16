@@ -1,0 +1,33 @@
+{
+  "postgresqlGuidelines": [
+    {
+      "rule": "Используйте двойные кавычки для имен таблиц с заглавными буквами",
+      "example": "SELECT * FROM \"User\" NOT FROM User",
+      "explanation": "PostgreSQL чувствителен к регистру, поэтому имена таблиц с заглавными буквами должны быть в кавычках"
+    },
+    {
+      "rule": "Добавляйте кавычки для имен таблиц в запросах",
+      "tablesRequiringQuotes": [
+        { "service": "pam", "table": "User", "correctUsage": "\"User\"" },
+        { "service": "wallet", "table": "Transaction", "correctUsage": "\"Transaction\"" },
+        { "service": "wallet", "table": "Balance", "correctUsage": "\"Balance\"" },
+        { "service": "financial-history", "table": "FinancialTransaction", "correctUsage": "\"FinancialTransaction\"" }
+      ]
+    },
+    {
+      "rule": "Диагностические запросы",
+      "queries": [
+        {
+          "description": "Получить список всех таблиц в базе данных",
+          "query": "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",
+          "usage": "Если таблица не найдена, используйте этот запрос для определения правильного имени"
+        },
+        {
+          "description": "Найти таблицы по части имени",
+          "query": "SELECT table_name FROM information_schema.tables WHERE table_name ILIKE '%user%'",
+          "usage": "Удобно для поиска таблиц, связанных с пользователями, транзакциями и т.д."
+        }
+      ]
+    }
+  ]
+}
