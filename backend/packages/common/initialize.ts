@@ -1,93 +1,55 @@
 /**
  * SQL assistant initialization
  */
-import fs from 'fs';
 import path from 'path';
+import { logError, logInfo } from './logger';
+import { databaseKnowledge } from './knowledge';
+import { resultStore } from './result-store';
 
 /**
- * Adds quotes to table names in the query if they are needed
- * @param query SQL query
- * @returns Corrected query
+ * Инициализирует основные компоненты системы
  */
-const fixTableNames = (query: string): string => {
-  // Regular expression to find table names after FROM and JOIN
-  const regex = /\b(FROM|JOIN)\s+([A-Z][a-zA-Z0-9]*)\b(?!\s*AS)(?!\s*"\w+")/g;
-  
-  // Replace found table names, adding quotes
-  return query.replace(regex, (match, keyword, tableName) => {
-    // If the table name is already in quotes, leave it as is
-    if (tableName.startsWith('"') && tableName.endsWith('"')) {
-      return match;
-    }
-    return `${keyword} "${tableName}"`;
-  });
-};
-
-/**
- * Updates queries in knowledge base examples, adding quotes to table names
- */
-const updateDatabaseDescriptions = () => {
-  const dbDescPath = path.join(process.cwd(), 'data', 'database-descriptions.json');
-  if (!fs.existsSync(dbDescPath)) {
-    console.warn('Database descriptions file not found:', dbDescPath);
-    return;
-  }
-  
+export const initialize = async (): Promise<void> => {
   try {
-    const data = fs.readFileSync(dbDescPath, 'utf-8');
-    const descriptions = JSON.parse(data);
-    let modified = false;
+    logInfo('Initializing SQL assistant...');
     
-    // Iterate over all databases
-    for (const db of descriptions) {
-      // Update queries in tables
-      if (db.tables) {
-        for (const table of db.tables) {
-          if (table.examples) {
-            for (const example of table.examples) {
-              const fixedQuery = fixTableNames(example.query);
-              if (fixedQuery !== example.query) {
-                example.query = fixedQuery;
-                modified = true;
-              }
-            }
-          }
-        }
-      }
-      
-      // Update common queries
-      if (db.commonQueries) {
-        for (const query of db.commonQueries) {
-          const fixedQuery = fixTableNames(query.query);
-          if (fixedQuery !== query.query) {
-            query.query = fixedQuery;
-            modified = true;
-          }
-        }
-      }
+    // Загружаем информацию о базах данных
+    const dbDescriptionsPath = path.join(process.cwd(), 'data', 'database-descriptions.json');
+    await databaseKnowledge.loadFromFile(dbDescriptionsPath);
+    
+    // Тестируем подключение к Redis
+    try {
+      await resultStore.connect();
+      logInfo('Redis connection established for query results storage');
+    } catch (error) {
+      logError(`Failed to connect to Redis: ${(error as Error).message}`);
+      logInfo('Will use fallback in-memory storage for query results');
     }
     
-    // If there were changes, save the updated data
-    if (modified) {
-      console.log('Updating database descriptions with fixed SQL queries...');
-      fs.writeFileSync(dbDescPath, JSON.stringify(descriptions, null, 2), 'utf-8');
-      console.log('Database descriptions updated successfully.');
-    } else {
-      console.log('No SQL queries needed to be fixed in database descriptions.');
-    }
+    logInfo('SQL assistant initialized.');
   } catch (error) {
-    console.error('Error updating database descriptions:', error);
+    logError(`Error initializing system: ${(error as Error).message}`);
+    throw error;
   }
 };
 
 /**
- * Application initialization
+ * Выполняет завершение работы системы
  */
-export const initialize = async () => {
-  console.log('Initializing SQL assistant...');
-  
-  // Update queries in the knowledge base
-  updateDatabaseDescriptions();
-  
-  console.log('SQL assistant initialized.');
+export const shutdown = async (): Promise<void> => {
+  try {
+    logInfo('Shutting down SQL assistant...');
+    
+    // Закрываем соединение с Redis
+    try {
+      await resultStore.disconnect();
+      logInfo('Redis connection closed');
+    } catch (error) {
+      logError(`Error disconnecting from Redis: ${(error as Error).message}`);
+    }
+    
+    logInfo('SQL assistant shut down successfully.');
+  } catch (error) {
+    logError(`Error during shutdown: ${(error as Error).message}`);
+  }
 };

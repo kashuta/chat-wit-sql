@@ -9,14 +9,15 @@ export interface QueryRequest {
  * Query response with results and metadata
  */
 export interface QueryResponse {
-  data: unknown;
+  data: Record<string, Record<string, unknown>[]>;
   explanation: string;
-  confidence: number;
+  confidence?: number;
   sql?: string;
   visualization?: {
     type: 'table' | 'line' | 'bar' | 'pie';
-    data: unknown;
+    data: Record<string, unknown>;
   };
+  errors?: Record<string, string>;
 }
 
 /**

@@ -1,32 +1,29 @@
-import { DatabaseService, SqlQuery } from '@common/types';
+import { DatabaseService, ErrorType, SqlQuery } from '@common/types';
 import { getPrismaClient } from '@common/prisma';
 import { createTypedError } from '@common/utils';
-import { ErrorType } from '@common/types';
 import { logDebug, logError, logInfo, logWarn } from '@common/logger';
 
 // Map to track connection status
 const connectionStatus: Record<string, boolean> = {};
 
-/**
- * Adds quotes to table names in a PostgreSQL query
- * @param query SQL query
- * @returns Corrected SQL query
- */
-const addQuotesToTableNames = (query: string): string => {
-  // Regular expression to find table names after FROM and JOIN
-  // Looks for table names that start with an uppercase letter and are not enclosed in quotes
-  const regex = /\b(FROM|JOIN)\s+([A-Z][a-zA-Z0-9]*)\b(?!\s*AS)(?!\s*"\w+")/g;
-  
-  // Replace found table names, adding quotes
-  const fixedQuery = query.replace(regex, (match, keyword, tableName) => {
-    // If the table name is already in quotes, leave it as is
-    if (tableName.startsWith('"') && tableName.endsWith('"')) {
-      return match;
-    }
-    return `${keyword} "${tableName}"`;
-  });
-  
-  return fixedQuery;
+// Клиенты для каждого сервиса баз данных - временно используем any вместо конкретных типов
+const databaseClients: Record<string, any> = {};
+
+// Статус подключения для каждого сервиса
+const databaseConnections: Record<string, boolean> = {
+  wallet: false,
+  'bets-history': false,
+  'user-activities': false,
+  'financial-history': false,
+  affiliate: false,
+  'casino-st8': false,
+  geolocation: false,
+  kyc: false,
+  notification: false,
+  optimove: false,
+  pam: false,
+  'payment-gateway': false,
+  traffic: false
 };
 
 const transformBigIntToNumber = (data: any): any => {
@@ -106,205 +103,235 @@ export const listSchemas = async (service: DatabaseService): Promise<string[]> =
 };
 
 /**
- * Execute a raw SQL query against a database service
- * @param query - SQL query object with service and query string
- * @returns Query results
+ * Executes SQL query on a specific database
  */
-export const executeSqlQuery = async (
-  query: SqlQuery
-): Promise<Record<string, unknown>[]> => {
+export const executeSqlQuery = async ({ service, query }: SqlQuery): Promise<any[]> => {
   try {
-    const { service, query: sqlString, params } = query;
-    const prisma = getPrismaClient(service);
-    
-    // Add quotes to table names if they start with an uppercase letter
-    const modifiedSqlString = addQuotesToTableNames(sqlString);
-    
-    // Log the original query
     logInfo(`Executing SQL query on ${service} database:`);
-    logInfo(`Query: ${sqlString}`);
+    logInfo(`Query: ${query}`);
     
-    // If the query was modified, log the changes
-    if (modifiedSqlString !== sqlString) {
-      logInfo(`Modified query: ${modifiedSqlString}`);
-      logInfo(`Added quotes to table names for PostgreSQL compatibility`);
+    // Check if we're connected to the database
+    if (!connectionStatus[service]) {
+      logWarn(`Database ${service} is not connected. Connecting now...`);
+      await testConnection(service);
     }
     
-    if (params) {
-      logDebug(`Query parameters: ${JSON.stringify(params)}`);
-    }
+    logInfo(`Database ${service} is already connected.`);
     
-    // Check if the database connection is working
-    if (!await isDbConnected(service)) {
-      logError(`Database ${service} is not connected`);
+    // Get a Prisma client
+    const prismaClient = getPrismaClient(service);
+    if (!prismaClient) {
       throw createTypedError(
         ErrorType.DATABASE_ERROR,
-        `Database ${service} is not connected`
+        `Could not get prisma client for service: ${service}`
       );
     }
     
-    // DEBUG: Try to discover tables if query fails
-    const tryAlternativeQuery = async (error: Error): Promise<Record<string, unknown>[] | null> => {
-      logWarn(`Original query failed: ${error.message}. Attempting to discover tables...`);
-      
-      if (sqlString.includes('"User"') || sqlString.includes('FROM User')) {
-        // Query might be looking for a User table - let's explore alternatives
-        logInfo(`Query appears to target User table. Checking table existence...`);
-        
-        try {
-          // Check if any user-related tables exist
-          const userTablesQuery = `
-            SELECT table_name, table_schema 
-            FROM information_schema.tables 
-            WHERE table_name ILIKE '%user%'
-          `;
-          const userTables = await prisma.$queryRawUnsafe(userTablesQuery);
-          logInfo(`Found user-related tables: ${JSON.stringify(userTables)}`);
-          
-          if (Array.isArray(userTables) && userTables.length > 0) {
-            // Found some user tables, let's try with the first one
-            const firstUserTable = userTables[0];
-            const tableName = firstUserTable.table_name || firstUserTable.TABLE_NAME;
-            const schemaName = firstUserTable.table_schema || firstUserTable.TABLE_SCHEMA || 'public';
-            
-            logInfo(`Trying with alternative table: "${schemaName}"."${tableName}"`);
-            
-            // Create alternative query
-            let alternativeQuery = sqlString;
-            
-            if (sqlString.includes('"User"')) {
-              alternativeQuery = sqlString.replace('"User"', `"${tableName}"`);
-            } else if (sqlString.includes('FROM User')) {
-              alternativeQuery = sqlString.replace('FROM User', `FROM "${tableName}"`);
-            }
-            
-            logInfo(`Executing alternative query: ${alternativeQuery}`);
-            try {
-              const result = await prisma.$queryRawUnsafe(alternativeQuery);
-              logInfo(`Alternative query succeeded with ${Array.isArray(result) ? result.length : 0} results`);
-              return Array.isArray(result) ? result : [{ result }];
-            } catch (altError) {
-              logWarn(`Alternative query failed: ${(altError as Error).message}`);
-            }
-          }
-        } catch (discoveryError) {
-          logWarn(`Error during table discovery: ${(discoveryError as Error).message}`);
-        }
-      }
-      
-      return null;
-    };
-    
-    // Execute the query
-    const startTime = Date.now();
-    
+    // Attempt to fix case sensitivity issues in column and table names
     try {
-      // Use the modified query with quotes for tables
-      const result = await prisma.$queryRawUnsafe(modifiedSqlString, ...(params ? Object.values(params) : []));
-      const executionTime = Date.now() - startTime;
+      // Store the client reference for later use in the column/table case fix
+      databaseClients[service] = prismaClient;
+      databaseConnections[service] = true;
       
-      // Validate and transform the result
-      if (!result) {
-        logWarn(`Query returned null or undefined result from database ${service}`);
-        return [];
+      // Fix any case sensitivity issues
+      const fixedQuery = await fixColumnAndTableCase(service, query);
+      
+      if (fixedQuery !== query) {
+        logInfo(`Query was modified to fix case sensitivity issues:`);
+        logInfo(`Original: ${query}`);
+        logInfo(`Fixed: ${fixedQuery}`);
+        query = fixedQuery;
       }
+    } catch (error) {
+      logWarn(`Failed to fix column/table case: ${(error as Error).message}`);
+      // Continue with original query if there's an error
+    }
+    
+    // Execute query
+    const startTime = Date.now();
+    try {
+      const result = await prismaClient.$queryRawUnsafe(query);
+      const duration = Date.now() - startTime;
+      logInfo(`Query executed successfully in ${duration}ms`);
       
-      if (!Array.isArray(result)) {
-        logWarn(`Query returned non-array result from database ${service}: ${typeof result}`);
-        // Convert non-array result to array with a single item
-        return [{ result }];
-      }
-      
-      logInfo(`Query executed successfully in ${executionTime}ms`);
-      logInfo(`Result rows: ${result.length}`);
-      
-      // Convert BigInt values for safe JSON serialization
-      const transformedResult = transformBigIntToNumber(result);
-      
-      if (result.length === 0) {
+      // Check if results are empty
+      if (Array.isArray(result) && result.length === 0) {
+        logInfo(`Result rows: ${result.length}`);
         logWarn(`Query returned empty result set. This might indicate:
         - Table exists but is empty
         - Table exists but query conditions matched no records
         - Table name might be correct but in a different case (PostgreSQL is case-sensitive)`);
         
-        // If query was looking for users, try alternative ways to find users
-        if (sqlString.toLowerCase().includes('user') && 
-            (sqlString.toLowerCase().includes('count') || sqlString.toLowerCase().includes('select'))) {
+        // Try to give more helpful diagnostic information
+        if (query.toLowerCase().includes('from') && query.toLowerCase().includes('where')) {
           logInfo(`Query appears to be looking for users but returned empty. Trying diagnostic queries...`);
           
-          try {
-            // Check for tables matching user pattern
-            const tableCheck = await prisma.$queryRawUnsafe(`
+          // Find tables related to the query subject (e.g., users, transactions)
+          const tableNameMatches = query.match(/from\s+"?(\w+)"?/i);
+          if (tableNameMatches && tableNameMatches.length > 1) {
+            const tableName = tableNameMatches[1];
+            
+            // Query information schema to find similar tables
+            try {
+              const tablesQuery = `
               SELECT table_name, table_schema 
               FROM information_schema.tables 
-              WHERE table_name ILIKE '%user%'
-            `);
-            
-            logInfo(`Tables matching 'user' pattern: ${JSON.stringify(tableCheck)}`);
-            
-            // If we found user tables, suggest them
-            if (Array.isArray(tableCheck) && tableCheck.length > 0) {
-              const tableNames = tableCheck.map(t => `${t.table_schema}.${t.table_name}`).join(', ');
-              logInfo(`Found user-related tables: ${tableNames}. Consider using these table names instead.`);
+              WHERE table_name ILIKE '%${tableName.replace(/[^a-zA-Z0-9]/g, '')}%'
+            `;
+              const tables = await prismaClient.$queryRawUnsafe(tablesQuery);
+              
+              if (Array.isArray(tables) && tables.length > 0) {
+                logInfo(`Tables matching '${tableName}' pattern: ${JSON.stringify(tables)}`);
+                
+                // Build a readable list of table names
+                const tableList = tables.map(t => `${t.table_schema}.${t.table_name}`).join(', ');
+                logInfo(`Found ${tables.length} ${tableName}-related tables: ${tableList}. Consider using these table names instead.`);
+              }
+            } catch (schemaError) {
+              logWarn(`Error querying information schema: ${(schemaError as Error).message}`);
             }
-          } catch (checkError) {
-            logWarn(`Error checking for user tables: ${(checkError as Error).message}`);
           }
         }
-      } else if (result.length <= 5) {
-        // Only log full results for small result sets
-        logDebug(`Query results: ${JSON.stringify(transformedResult, null, 2)}`);
       } else {
-        // For larger result sets, log only the first few items
-        logDebug(`First 5 results: ${JSON.stringify(transformedResult.slice(0, 5), null, 2)}`);
+        logInfo(`Result rows: ${Array.isArray(result) ? result.length : 'non-array'}`);
+        
+        if (Array.isArray(result) && result.length > 0) {
+          logDebug(`Query results: ${JSON.stringify(result.slice(0, 3))}`);
+          if (result.length > 3) {
+            logDebug(`... and ${result.length - 3} more rows`);
+          }
+        }
       }
       
-      // Always return transformed result to handle BigInt values
-      return transformedResult;
-    } catch (queryError) {
-      // Enhanced logging for SQL syntax errors
-      logError(`SQL Error in query: ${sqlString}`);
-      logError(`SQL Error details: ${(queryError as Error).message}`);
+      return Array.isArray(result) ? result : [];
+    } catch (error) {
+      const errorMsg = (error as Error).message;
+      logError(`SQL Error in query: ${query}`);
+      logError(`SQL Error details: ${errorMsg}`);
       
-      // Try to provide more helpful context about the error
-      if ((queryError as Error).message.includes('relation') && (queryError as Error).message.includes('does not exist')) {
+      // Provide helpful advice based on error type
+      if (errorMsg.includes('relation') && errorMsg.includes('does not exist')) {
         logError(`Table name might be incorrect. In PostgreSQL, table names are case-sensitive and may need quotes for capitalized names.`);
         logError(`Try using "TableName" instead of TableName for capitalized table names.`);
-        
-        // Try alternative tables
-        const alternativeResult = await tryAlternativeQuery(queryError as Error);
-        if (alternativeResult) {
-          logInfo(`Successfully executed query with alternative table name`);
-          return alternativeResult;
-        }
-      } else if ((queryError as Error).message.includes('column') && (queryError as Error).message.includes('does not exist')) {
+      } else if (errorMsg.includes('column') && errorMsg.includes('does not exist')) {
         logError(`Column name might be incorrect. Check the column names in the database schema.`);
-      } else if ((queryError as Error).message.includes('syntax error')) {
+      } else if (errorMsg.includes('syntax error')) {
         logError(`SQL syntax error detected. Please review the query syntax.`);
       }
       
-      throw queryError;
-    }
-  } catch (error) {
-    logError(`Error executing SQL query on ${query.service}: ${(error as Error).message}`);
-    
-    // In development, we could provide more detailed error info
-    if (process.env.NODE_ENV === 'development') {
-      if (error instanceof Error && error.stack) {
-        logDebug(`Error stack trace: ${error.stack}`);
+      // Check if we can automatically fix the query
+      if ((errorMsg.includes('relation') && errorMsg.includes('does not exist')) || 
+          (errorMsg.includes('column') && errorMsg.includes('does not exist'))) {
+        logWarn(`Original query failed: ${errorMsg}. Attempting to discover tables...`);
+        
+        // Find the problematic table or column name from the error message
+        const tableMatch = errorMsg.match(/relation "([^"]+)" does not exist/);
+        const columnMatch = errorMsg.match(/column "([^"]+)" does not exist/);
+        
+        if (tableMatch) {
+          const problematicTable = tableMatch[1];
+          logInfo(`Query appears to target ${problematicTable} table. Checking table existence...`);
+          
+          try {
+            // Find similar table names
+            const tablesQuery = `
+            SELECT table_name, table_schema 
+            FROM information_schema.tables 
+            WHERE table_name ILIKE '%${problematicTable.replace(/[^a-zA-Z0-9]/g, '')}%'
+          `;
+            const tables = await prismaClient.$queryRawUnsafe(tablesQuery);
+            
+            if (Array.isArray(tables) && tables.length > 0) {
+              logInfo(`Found ${problematicTable}-related tables: ${JSON.stringify(tables)}`);
+              
+              // Try with first alternative table
+              if (tables.length > 0) {
+                const alternativeTable = tables[0].table_name;
+                logInfo(`Trying with alternative table: "${tables[0].table_schema}"."${alternativeTable}"`);
+                
+                const alternativeQuery = query.replace(
+                  new RegExp(`"?${problematicTable}"?`, 'g'),
+                  `"${alternativeTable}"`
+                );
+                
+                logInfo(`Executing alternative query: ${alternativeQuery}`);
+                try {
+                  const alternativeResult = await prismaClient.$queryRawUnsafe(alternativeQuery);
+                  logInfo(`Alternative query worked!`);
+                  return Array.isArray(alternativeResult) ? alternativeResult : [];
+                } catch (altError) {
+                  logWarn(`Alternative query failed: ${(altError as Error).message}`);
+                }
+              }
+            }
+          } catch (schemaError) {
+            logWarn(`Error querying schema for alternative tables: ${(schemaError as Error).message}`);
+          }
+        } else if (columnMatch) {
+          const problematicColumn = columnMatch[1];
+          // Extract table name from the query
+          const tableNameMatch = query.match(/from\s+"?(\w+)"?/i);
+          
+          if (tableNameMatch && tableNameMatch.length > 1) {
+            const tableName = tableNameMatch[1];
+            logInfo(`Query refers to column "${problematicColumn}" in table "${tableName}". Checking column existence...`);
+            
+            try {
+              // Find columns of the table
+              const columnsQuery = `
+              SELECT column_name 
+              FROM information_schema.columns 
+              WHERE table_name = '${tableName}'
+            `;
+              const columns = await prismaClient.$queryRawUnsafe(columnsQuery);
+              
+              if (Array.isArray(columns) && columns.length > 0) {
+                logInfo(`Columns in table ${tableName}: ${JSON.stringify(columns)}`);
+                
+                // Find similar column names
+                const similarColumns = columns.filter(col => 
+                  col.column_name.toLowerCase().includes(problematicColumn.toLowerCase()) ||
+                  problematicColumn.toLowerCase().includes(col.column_name.toLowerCase())
+                );
+                
+                if (similarColumns.length > 0) {
+                  logInfo(`Found similar columns: ${JSON.stringify(similarColumns)}`);
+                  
+                  // Try with first similar column
+                  const alternativeColumn = similarColumns[0].column_name;
+                  logInfo(`Trying with alternative column: "${alternativeColumn}"`);
+                  
+                  const alternativeQuery = query.replace(
+                    new RegExp(`"?${problematicColumn}"?`, 'g'),
+                    `"${alternativeColumn}"`
+                  );
+                  
+                  logInfo(`Executing alternative query: ${alternativeQuery}`);
+                  try {
+                    const alternativeResult = await prismaClient.$queryRawUnsafe(alternativeQuery);
+                    logInfo(`Alternative query worked!`);
+                    return Array.isArray(alternativeResult) ? alternativeResult : [];
+                  } catch (altError) {
+                    logWarn(`Alternative query failed: ${(altError as Error).message}`);
+                  }
+                }
+              }
+            } catch (schemaError) {
+              logWarn(`Error querying schema for column information: ${(schemaError as Error).message}`);
+            }
+          }
+        }
       }
       
       throw createTypedError(
         ErrorType.DATABASE_ERROR,
-        `Failed to execute query on ${query.service}: ${(error as Error).message}`
+        `Failed to execute query on ${service}: ${errorMsg}`
       );
     }
-    
-    // In production, provide a more generic error
-    throw createTypedError(
-      ErrorType.DATABASE_ERROR,
-      `Failed to execute query on ${query.service}`
-    );
+  } catch (error) {
+    logError(`Error executing SQL query on ${service}: ${(error as Error).message}`);
+    logDebug(`Error stack trace: ${(error as Error).stack}`);
+    throw error;
   }
 };
 
@@ -362,4 +389,236 @@ export const setupDatabaseConnections = async (): Promise<void> => {
     }
   }
   logInfo('Finished initial database connection checks.');
+};
+
+/**
+ * Функция для преобразования имени таблицы или колонки в правильный регистр
+ * на основе фактической схемы базы данных
+ */
+export const fixColumnAndTableCase = async (
+  service: DatabaseService,
+  query: string
+): Promise<string> => {
+  try {
+    // Если подключение не установлено, просто возвращаем запрос без изменений
+    if (!databaseConnections[service]) {
+      return query;
+    }
+    
+    const client = databaseClients[service];
+    if (!client) {
+      logWarn(`Client for service ${service} not found, skipping case fix`);
+      return query;
+    }
+    
+    // Ищем упоминания таблиц и колонок в запросе
+    const tableRegex = /FROM\s+"?([A-Za-z0-9_]+)"?/gi;
+    let tableMatch;
+    let fixedQuery = query;
+    
+    // Исправляем имена таблиц
+    while ((tableMatch = tableRegex.exec(query)) !== null) {
+      const tableName = tableMatch[1];
+      
+      // Получаем актуальное имя таблицы из базы данных
+      try {
+        const tableResults = await client.$queryRawUnsafe(`
+          SELECT table_name
+          FROM information_schema.tables 
+          WHERE LOWER(table_name) = LOWER($1) AND table_schema = 'public'
+        `, tableName);
+        
+        if (tableResults && Array.isArray(tableResults) && tableResults.length > 0) {
+          const correctTableName = tableResults[0].table_name;
+          
+          if (correctTableName !== tableName) {
+            logInfo(`Fixing table name case: "${tableName}" -> "${correctTableName}"`);
+            
+            // Заменяем имя таблицы в запросе, сохраняя регистр ключевых слов и другие символы
+            const oldPart = tableMatch[0];
+            const newPart = oldPart.replace(new RegExp(`"?${tableName}"?`, 'i'), `"${correctTableName}"`);
+            fixedQuery = fixedQuery.replace(oldPart, newPart);
+            
+            // Также ищем упоминания этой таблицы в других частях запроса (JOIN, WHERE и т.д.)
+            const tableReferenceRegex = new RegExp(`([^a-zA-Z0-9_])"?${tableName}"?\\.`, 'gi');
+            fixedQuery = fixedQuery.replace(tableReferenceRegex, `$1"${correctTableName}".`);
+          }
+          
+          // Ищем и исправляем имена колонок для данной таблицы
+          try {
+            // Получаем все колонки для этой таблицы
+            const columnResults = await client.$queryRawUnsafe(`
+              SELECT column_name
+              FROM information_schema.columns 
+              WHERE LOWER(table_name) = LOWER($1) AND table_schema = 'public'
+            `, correctTableName);
+            
+            if (columnResults && Array.isArray(columnResults)) {
+              // Создаем карту соответствия нижний_регистр -> правильноеИмя
+              const columnMap = new Map<string, string>();
+              
+              for (const col of columnResults) {
+                columnMap.set(col.column_name.toLowerCase(), col.column_name);
+              }
+              
+              logDebug(`Table "${correctTableName}" columns: ${Array.from(columnMap.values()).join(', ')}`);
+              
+              // Ищем упоминания колонок в запросе
+              const columnRegex = new RegExp(`"?${correctTableName}"?\\."?([A-Za-z0-9_]+)"?`, 'gi');
+              let columnMatch;
+              
+              while ((columnMatch = columnRegex.exec(fixedQuery)) !== null) {
+                const columnName = columnMatch[1];
+                const columnLower = columnName.toLowerCase();
+                
+                if (columnMap.has(columnLower) && columnMap.get(columnLower) !== columnName) {
+                  const correctColumnName = columnMap.get(columnLower) || columnName;
+                  logInfo(`Fixing column name case: "${columnName}" -> "${correctColumnName}"`);
+                  
+                  const oldPart = columnMatch[0];
+                  const newPart = oldPart.replace(new RegExp(`"?${columnName}"?`), `"${correctColumnName}"`);
+                  fixedQuery = fixedQuery.replace(oldPart, newPart);
+                }
+              }
+              
+              // Отдельно обрабатываем упоминания колонок без указания таблицы
+              // Например: SELECT columnName FROM Table
+              for (const [lowercaseCol, correctCol] of columnMap.entries()) {
+                // Ищем колонки в SELECT, GROUP BY, ORDER BY и других частях запроса
+                const standaloneColRegex = new RegExp(`(SELECT|GROUP BY|ORDER BY|WHERE|AND|OR|,)\\s+"?([A-Za-z0-9_]+)"?\\b`, 'gi');
+                let standaloneMatch;
+                
+                while ((standaloneMatch = standaloneColRegex.exec(fixedQuery)) !== null) {
+                  const colName = standaloneMatch[2];
+                  
+                  if (colName.toLowerCase() === lowercaseCol && colName !== correctCol) {
+                    // Заменяем только если это имя колонки, а не алиас или другой идентификатор
+                    if (!fixedQuery.includes(` AS ${colName}`)) {
+                      logInfo(`Fixing standalone column name: "${colName}" -> "${correctCol}"`);
+                      
+                      const oldPart = standaloneMatch[0];
+                      const newPart = oldPart.replace(new RegExp(`"?${colName}"?\\b`), `"${correctCol}"`);
+                      fixedQuery = fixedQuery.replace(oldPart, newPart);
+                    }
+                  }
+                }
+              }
+              
+              // Специальная обработка для GROUP BY, ORDER BY и других клауз, где колонки указываются без явного названия таблицы
+              // Проверяем все колонки таблицы
+              const clauses = ["GROUP BY", "ORDER BY", "WHERE"];
+              for (const clause of clauses) {
+                // Ищем клаузу в запросе
+                const clauseRegex = new RegExp(`${clause}\\s+([^;]*)`, 'i');
+                const clauseMatch = fixedQuery.match(clauseRegex);
+                
+                if (clauseMatch) {
+                  const clauseContent = clauseMatch[1];
+                  let modifiedClauseContent = clauseContent;
+                  
+                  // Ищем все колонки в клаузе
+                  const columnNamesRegex = /\b([A-Za-z0-9_]+)\b/g;
+                  let colMatch;
+                  
+                  while ((colMatch = columnNamesRegex.exec(clauseContent)) !== null) {
+                    const colName = colMatch[1];
+                    const colLower = colName.toLowerCase();
+                    
+                    // Проверяем, есть ли такая колонка в таблице с другим регистром
+                    if (columnMap.has(colLower) && columnMap.get(colLower) !== colName) {
+                      const correctColName = columnMap.get(colLower) || colName;
+                      
+                      // Заменяем имя колонки на правильное с учетом регистра
+                      logInfo(`Fixing column name in ${clause}: "${colName}" -> "${correctColName}"`);
+                      
+                      // Заменяем только полное слово, не часть другого слова
+                      modifiedClauseContent = modifiedClauseContent.replace(
+                        new RegExp(`\\b"?${colName}"?\\b`, 'g'), 
+                        `"${correctColName}"`
+                      );
+                    }
+                  }
+                  
+                  // Если было изменение, обновляем запрос
+                  if (modifiedClauseContent !== clauseContent) {
+                    fixedQuery = fixedQuery.replace(clauseContent, modifiedClauseContent);
+                  }
+                }
+              }
+            }
+          } catch (error) {
+            logWarn(`Failed to get column information for table ${correctTableName}: ${(error as Error).message}`);
+          }
+        }
+      } catch (error) {
+        logWarn(`Failed to get table information for ${tableName}: ${(error as Error).message}`);
+      }
+    }
+    
+    return fixedQuery;
+  } catch (error) {
+    logError(`Error in fixColumnAndTableCase: ${(error as Error).message}`);
+    return query; // Возвращаем оригинальный запрос в случае ошибки
+  }
+};
+
+/**
+ * Получает информацию о колонках таблицы
+ */
+export const getTableColumns = async (
+  service: DatabaseService, 
+  tableName: string
+): Promise<string[]> => {
+  try {
+    if (!databaseConnections[service]) {
+      throw new Error(`Database ${service} is not connected`);
+    }
+    
+    const client = databaseClients[service];
+    
+    const result = await client.$queryRawUnsafe(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = $1 AND table_schema = 'public'
+    `, tableName);
+    
+    if (Array.isArray(result)) {
+      return result.map((row: any) => row.column_name);
+    }
+    
+    return [];
+  } catch (error) {
+    logError(`Failed to get columns for table ${tableName} in ${service}: ${(error as Error).message}`);
+    return [];
+  }
+};
+
+/**
+ * Test the connection to a database service
+ */
+const testConnection = async (service: DatabaseService): Promise<boolean> => {
+  try {
+    const prismaClient = getPrismaClient(service);
+    if (!prismaClient) {
+      logError(`No Prisma client available for ${service}`);
+      return false;
+    }
+    
+    // Execute a simple query to test the connection
+    await prismaClient.$queryRawUnsafe('SELECT 1');
+    
+    // Mark connection as established
+    connectionStatus[service] = true;
+    logInfo(`Database connection to ${service} successful.`);
+    
+    // Store the client for case sensitivity checks
+    databaseClients[service] = prismaClient;
+    databaseConnections[service] = true;
+    
+    return true;
+  } catch (error) {
+    logError(`Failed to connect to ${service} database: ${(error as Error).message}`);
+    connectionStatus[service] = false;
+    return false;
+  }
 }; 

@@ -4,6 +4,9 @@ import { createTypedError } from '@common/utils';
 import { getOpenAIModel, createOutputParser } from '@common/llm';
 import { executeSqlQuery as dbExecuteSqlQuery } from '@execution/database';
 import { EXECUTION_SYSTEM_PROMPT } from '../../data/prompts';
+import { distributedQueryProcessor } from './distributed-query';
+import { distributedPlanBuilder } from '@planning/distributed-plan-builder';
+import { logDebug, logInfo, logWarn } from '@common/logger';
 
 /**
  * Executes an SQL query with error handling and logging
@@ -16,7 +19,7 @@ export const executeSqlQuery = async (
   query: string
 ): Promise<Record<string, unknown>[]> => {
   // Calling the actual database connection instead of a mock
-  console.log(`Executing SQL query on ${service}: ${query}`);
+  logInfo(`Executing SQL query on ${service}: ${query}`);
   
   try {
     // Using the actual database connection instead of a mock
@@ -24,11 +27,11 @@ export const executeSqlQuery = async (
       service, 
       query 
     });
-    console.log(`SQL query executed successfully`);
-    console.log(`Result: ${JSON.stringify(result)}`);
+    logInfo(`SQL query executed successfully`);
+    logDebug(`Result: ${JSON.stringify(result)}`);
     return result;
   } catch (error) {
-    console.error(`Error executing SQL: ${(error as Error).message}`);
+    logWarn(`Error executing SQL: ${(error as Error).message}`);
     throw error;
   }
 };
@@ -56,52 +59,100 @@ export const executeQueryPlan = async (
   query: string
 ): Promise<QueryResponse> => {
   try {
-    // Execute each step in the plan
-    const stepResults: Record<string, Record<string, unknown>[]> = {};
-    const executedQueries: string[] = [];
+    // Проверяем, нужно ли использовать распределенный исполнитель
+    const needsDistributedExecution = 
+      plan.requiredServices.length > 1 || 
+      plan.steps.some(step => !step.sqlQuery);
     
-    for (const step of plan.steps) {
-      if (!step.sqlQuery) {
-        continue;
+    let stepResults: Record<string, Record<string, unknown>[]> = {};
+    let executedQueries: string[] = [];
+    let executionErrors: Record<string, string> = {};
+    
+    if (needsDistributedExecution) {
+      logInfo('Using distributed query execution for multi-service query');
+      
+      // Преобразуем обычный план в распределенный
+      const distributedPlan = distributedPlanBuilder.convertToDQL(plan, query);
+      
+      // Выполняем распределенный план
+      const distributedResult = await distributedQueryProcessor.executeDistributedPlan(distributedPlan);
+      
+      // Переносим результаты в формат, ожидаемый дальнейшим кодом
+      stepResults = distributedResult.intermediateResults || {};
+      
+      // Форматируем логи запросов для отображения
+      for (const step of distributedPlan.steps) {
+        if (!step.isInMemory && step.sqlQuery) {
+          executedQueries.push(`/* ${step.service} */\n${step.sqlQuery}`);
+        }
       }
       
-      executedQueries.push(`/* ${step.service} */\n${step.sqlQuery}`);
-      try {
-        console.log(`Executing step for ${step.service}: ${step.sqlQuery}`);
-        const result = await executeSqlQuery(step.service, step.sqlQuery);
-        console.log(`Step result for ${step.service}: ${JSON.stringify(result)}`);
-        stepResults[step.service] = result;
-      } catch (queryError) {
-        console.error(`Error executing step for ${step.service}: ${(queryError as Error).message}`);
-        // Continue with other steps even if one fails
-        stepResults[step.service] = [{ error: (queryError as Error).message }];
+      // Если есть ошибки, записываем их
+      if (distributedResult.errors) {
+        executionErrors = distributedResult.errors;
+        
+        // Проверяем, есть ли глобальная ошибка, которая могла прервать выполнение
+        if (distributedResult.errors.global) {
+          throw new Error(distributedResult.errors.global);
+        }
+      }
+      
+      // Финальные результаты должны быть включены в stepResults
+      if (distributedResult.finalResults.length > 0) {
+        stepResults['final'] = distributedResult.finalResults;
+      }
+    } else {
+      // Используем простое последовательное выполнение для одиночного сервиса
+      logInfo('Using standard sequential execution for single-service query');
+      
+      // Выполняем каждый шаг плана
+      for (const step of plan.steps) {
+        if (!step.sqlQuery) {
+          continue;
+        }
+        
+        executedQueries.push(`/* ${step.service} */\n${step.sqlQuery}`);
+        try {
+          logInfo(`Executing step for ${step.service}: ${step.sqlQuery}`);
+          const result = await executeSqlQuery(step.service, step.sqlQuery);
+          logInfo(`Step result for ${step.service}: ${JSON.stringify(result)}`);
+          stepResults[step.service] = result;
+        } catch (queryError) {
+          const errorMessage = `Error executing step for ${step.service}: ${(queryError as Error).message}`;
+          logWarn(errorMessage);
+          
+          // Продолжаем с другими шагами, даже если один не сработал
+          stepResults[step.service] = [{ error: (queryError as Error).message }];
+          
+          executionErrors[step.service] = errorMessage;
+        }
       }
     }
     
     if (Object.keys(stepResults).length === 0) {
       throw createTypedError(
         ErrorType.PROCESSING_ERROR,
-        'No SQL queries were executed'
+        'No SQL queries were executed or all queries failed'
       );
     }
     
-    // Interpret the results
+    // Выбираем модель для интерпретации результатов
     const model = getOpenAIModel();
     const parser = createOutputParser(executionResultSchema);
     
     const sqlQueriesStr = executedQueries.join('\n\n');
-    console.log('=== QUERY RESULTS BEFORE SENDING TO LLM ===');
-    console.log(JSON.stringify(stepResults, null, 2));
-    console.log('=== END QUERY RESULTS ===');
+    logInfo('=== QUERY RESULTS BEFORE SENDING TO LLM ===');
+    logInfo(JSON.stringify(stepResults, null, 2));
+    logInfo('=== END QUERY RESULTS ===');
     const resultsStr = JSON.stringify(stepResults, null, 2);
     
-    // System message
+    // Системное сообщение
     const systemMessage = {
       role: 'system',
       content: EXECUTION_SYSTEM_PROMPT
     };
     
-    // User message
+    // Сообщение пользователя
     const userMessage = {
       role: 'user',
       content: `User query: ${query}
@@ -115,7 +166,7 @@ ${resultsStr}
 Please interpret these results.`
     };
     
-    // Prepare messages for the model
+    // Подготавливаем сообщения для модели
     const messages = [systemMessage, userMessage];
     
     const response = await model.invoke(messages);
@@ -124,11 +175,11 @@ Please interpret these results.`
       throw new Error('LLM response content is not a string');
     }
     
-    console.log(`Raw execution response: ${response.content}`);
+    logInfo(`Raw execution response: ${response.content}`);
     
     const interpretation = await parser.parse(response.content) as ExecutionOutput;
     
-    // Return a structured response
+    // Возвращаем структурированный ответ
     return {
       data: stepResults,
       explanation: interpretation.explanation,
@@ -138,14 +189,15 @@ Please interpret these results.`
         type: interpretation.visualizationType as 'table' | 'line' | 'bar' | 'pie',
         data: stepResults,
       },
+      errors: Object.keys(executionErrors).length > 0 ? executionErrors : undefined,
     };
   } catch (error) {
-    console.error('Error in execution module:', error);
+    logWarn('Error in execution module:', error);
     
-    // Return a fallback response
+    // Возвращаем резервный ответ в случае ошибки
     return {
       data: {},
-      explanation: 'An error occurred while executing the query plan.',
+      explanation: `An error occurred while executing the query plan: ${(error as Error).message}`,
       confidence: 0.1,
     };
   }
