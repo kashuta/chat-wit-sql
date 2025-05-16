@@ -1014,7 +1014,9 @@ export class DistributedQueryProcessor {
       
       for (const pattern of columnPatterns) {
         while ((match = pattern.exec(sqlQuery)) !== null) {
-          if (!columns.includes(match[1])) {
+          // Пропускаем SQL ключевые слова
+          const sqlKeywords = ['SELECT', 'FROM', 'WHERE', 'JOIN', 'GROUP', 'ORDER', 'BY', 'HAVING', 'LIMIT', 'OFFSET', 'AS'];
+          if (!sqlKeywords.includes(match[1].toUpperCase()) && !columns.includes(match[1])) {
             columns.push(match[1]);
           }
         }
