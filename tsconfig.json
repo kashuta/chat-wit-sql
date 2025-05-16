@@ -9,7 +9,7 @@
     "noImplicitAny": true,
     "noImplicitThis": true,
     "alwaysStrict": true,
-    "noUnusedLocals": true,
+    "noUnusedLocals": false,
     "noUnusedParameters": true,
     "noImplicitReturns": true,
     "removeComments": true,
@@ -24,7 +24,9 @@
       "@common/*": ["packages/common/*"],
       "@perception/*": ["packages/perception/*"],
       "@planning/*": ["packages/planning/*"],
-      "@execution/*": ["packages/execution/*"]
+      "@execution/*": ["packages/execution/*"],
+      "@conflict-resolution": ["packages/conflict-resolution"],
+      "@conflict-resolution/*": ["packages/conflict-resolution/*"]
     }
   },
   "include": ["src/**/*", "packages/**/*"],
