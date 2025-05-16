@@ -3,6 +3,7 @@ import { ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemp
 import { StructuredOutputParser } from 'langchain/output_parsers';
 import { z } from 'zod';
 import { logDebug, logError, logInfo } from './logger';
+import { MESSAGE_TEMPLATES } from '../../data/prompts';
 
 /**
  * Creates and returns the OpenAI chat model instance
@@ -14,12 +15,14 @@ export const getOpenAIModel = (): ChatOpenAI => {
   const temperature = parseFloat(process.env.OPENAI_TEMPERATURE || '0.1');
   
   if (!apiKey) {
-    const errorMsg = 'OPENAI_API_KEY переменная окружения обязательна';
+    const errorMsg = MESSAGE_TEMPLATES.error.openAIKeyRequired;
     logError(errorMsg);
     throw new Error(errorMsg);
   }
   
-  logInfo(`Инициализация модели OpenAI: ${modelName}, температура: ${temperature}`);
+  logInfo(MESSAGE_TEMPLATES.info.initializingModel
+    .replace('{model}', modelName)
+    .replace('{temperature}', temperature.toString()));
   
   return new ChatOpenAI({
     openAIApiKey: apiKey,
@@ -36,7 +39,7 @@ export const getOpenAIModel = (): ChatOpenAI => {
 export function createOutputParser<T extends z.ZodTypeAny>(
   schema: T
 ): StructuredOutputParser<z.infer<T>> {
-  logDebug('Создание парсера структурированного вывода');
+  logDebug('Creating structured output parser');
   return StructuredOutputParser.fromZodSchema(schema);
 }
 
@@ -50,10 +53,11 @@ export const createChatPrompt = (
   systemPrompt: string,
   humanPromptTemplate: string
 ): ChatPromptTemplate => {
-  logDebug('Создание шаблона промпта для чата');
-  logDebug(`Системный промпт (первые 100 символов): ${systemPrompt.substring(0, 100)}...`);
+  logDebug('Creating chat prompt template');
+  logDebug(MESSAGE_TEMPLATES.debug.systemPromptFirst100
+    .replace('{text}', systemPrompt.substring(0, 100)));
   
-  // Проверка наличия выражений внутри фигурных скобок в шаблоне
+  // Check for expressions in curly braces in the template
   const variableMatches = humanPromptTemplate.match(/{([^}]+)}/g);
   const inputVariables: string[] = [];
   
@@ -62,17 +66,18 @@ export const createChatPrompt = (
     for (const match of variableMatches) {
       const varName = match.slice(1, -1).trim();
       inputVariables.push(varName);
-      logDebug(`Найдена переменная в шаблоне: ${varName}`);
+      logDebug(MESSAGE_TEMPLATES.debug.variableFound.replace('{varName}', varName));
     }
   }
   
   try {
-    // Создаем шаблоны сообщений
+    // Create message templates
     const systemMessagePrompt = SystemMessagePromptTemplate.fromTemplate(systemPrompt);
     const humanMessagePrompt = HumanMessagePromptTemplate.fromTemplate(humanPromptTemplate);
     
     // Explicitly define the input variables to avoid errors
-    logDebug(`Создание шаблона чата с переменными: ${inputVariables.join(', ') || 'нет переменных'}`);
+    logDebug(MESSAGE_TEMPLATES.debug.chatTemplateCreation
+      .replace('{variables}', inputVariables.join(', ') || 'no variables'));
     const chatPrompt = ChatPromptTemplate.fromMessages([
       systemMessagePrompt,
       humanMessagePrompt,
@@ -80,16 +85,16 @@ export const createChatPrompt = (
     
     return chatPrompt;
   } catch (error) {
-    logError('Ошибка при создании шаблона промпта:', error);
+    logError(MESSAGE_TEMPLATES.error.promptCreationError, error);
     if (error instanceof Error) {
-      logError(`Сообщение ошибки: ${error.message}`);
+      logError(MESSAGE_TEMPLATES.error.errorMessage.replace('{message}', error.message));
       if (error.stack) {
-        logDebug(`Стек ошибки: ${error.stack}`);
+        logDebug(MESSAGE_TEMPLATES.debug.errorStack.replace('{stack}', error.stack));
       }
     }
     
     // Creating a simple fallback template
-    logDebug('Создание простого резервного шаблона');
+    logDebug(MESSAGE_TEMPLATES.debug.creatingBackupTemplate);
     return ChatPromptTemplate.fromTemplate(`${systemPrompt}\n\n${humanPromptTemplate}`);
   }
 }; 
