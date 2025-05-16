@@ -3,6 +3,7 @@ import { useLanguage } from './contexts/LanguageContext';
 import LanguageSwitcher from './components/LanguageSwitcher';
 import { Language } from './localization';
 import { languageInstructions } from './config/languageConfig';
+import QueryExecutionLog from './components/QueryExecutionLog';
 
 type QueryResult = {
   data: Record<string, unknown>;
@@ -26,6 +27,7 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [queryId, setQueryId] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,6 +37,7 @@ const App: React.FC = () => {
     setLoading(true);
     setError(null);
     setResult(null);
+    setQueryId(null);
     
     try {
       let modifiedQuery = query;
@@ -61,6 +64,7 @@ const App: React.FC = () => {
       
       const data = await response.json();
       setResult(data);
+      if (data.queryId) setQueryId(data.queryId);
     } catch (err) {
       setError((err as Error).message || t.errorDefault);
     } finally {
@@ -99,6 +103,10 @@ const App: React.FC = () => {
       </form>
       
       {error && <div className="error-message">{error}</div>}
+      
+      {queryId && (
+        <QueryExecutionLog queryId={queryId} isActive={loading} />
+      )}
       
       {result && (
         <div className="result-container">
