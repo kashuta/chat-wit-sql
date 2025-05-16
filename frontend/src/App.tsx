@@ -87,13 +87,13 @@ const App: React.FC = () => {
             placeholder={t.inputPlaceholder}
             className="query-input"
           />
-          {language === 'ru' && (
-            <div className="language-hint">
-              * {t.languageHint || "Instruction \"Отвечай на русском\" will be added to your query"}
-            </div>
-          )}
         </div>
-        <button type="submit" disabled={loading} className="submit-button">
+        <button 
+          type="submit" 
+          disabled={loading} 
+          className="submit-button"
+          key={`submit-btn-${language}`} 
+        >
           {loading ? t.processingButton : t.askButton}
         </button>
       </form>

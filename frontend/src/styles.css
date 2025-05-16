@@ -115,6 +115,8 @@ body {
   font-size: 1rem;
   cursor: pointer;
   transition: background-color 0.2s;
+  width: 150px;
+  text-align: center;
 }
 
 .submit-button:hover {
