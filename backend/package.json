@@ -1,10 +1,10 @@
 {
   "name": "dante-ai-data-agent-backend",
   "version": "1.0.0",
-  "main": "dist/index.js",
+  "main": "dist/src/index.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node -r dotenv/config dist/index.js",
+    "start": "node -r dotenv/config -r tsconfig-paths/register dist/src/index.js",
     "dev": "ts-node -r dotenv/config -r tsconfig-paths/register src/index.ts",
     "build": "tsc -p tsconfig.json",
     "lint": "eslint --ext .ts src packages",

@@ -24,7 +24,8 @@
       "@common/*": ["packages/common/*"],
       "@perception/*": ["packages/perception/*"],
       "@planning/*": ["packages/planning/*"],
-      "@execution/*": ["packages/execution/*"]
+      "@execution/*": ["packages/execution/*"],
+      "@conflict-resolution": ["packages/conflict-resolution"]
     }
   },
   "include": ["src/**/*", "packages/**/*"],
