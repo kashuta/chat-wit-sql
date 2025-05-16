@@ -42,6 +42,7 @@
     "@types/node": "^22.15.18",
     "dotenv": "^16.5.0",
     "langchain": "^0.3.25",
+    "pg": "^8.16.0",
     "prisma": "^6.8.0",
     "redis": "^5.0.1",
     "ts-node": "^10.9.2",
@@ -53,6 +54,7 @@
   "devDependencies": {
     "@types/chai": "^5.2.2",
     "@types/mocha": "^10.0.10",
+    "@types/pg": "^8.15.2",
     "@types/sinon": "^17.0.4",
     "@types/uuid": "^10.0.0",
     "@typescript-eslint/eslint-plugin": "^8.32.1",

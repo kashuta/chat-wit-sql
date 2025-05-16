@@ -3,7 +3,7 @@ import { IncomingMessage, ServerResponse } from 'http';
 import { analyzeQuery } from '@perception/index';
 import { createQueryPlan } from '@planning/index';
 import { executeQueryPlan } from '@execution/index';
-import { isConfidentEnough } from '@common/utils';
+import { isConfidentEnough, safeJsonStringify } from '@common/utils';
 import { QueryRequest } from '@common/types';
 
 /**
@@ -46,7 +46,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       
       if (!isConfidentEnough(perceptionResult.confidence)) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
+        res.end(safeJsonStringify({
           data: {},
           explanation: 'I\'m not confident I understand your query. Could you rephrase it?',
           confidence: perceptionResult.confidence,
@@ -59,20 +59,20 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       
       // Send response
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(response));
+      res.end(safeJsonStringify(response));
     } catch (error) {
       console.error('Error processing request:', error);
       res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Internal server error' }));
+      res.end(safeJsonStringify({ error: 'Internal server error', details: (error as Error).message }));
     }
   } else if (req.method === 'GET' && (req.url === '/' || req.url === '/healthcheck')) {
     // Health check endpoint
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', message: 'Dante AI Data Agent is running' }));
+    res.end(safeJsonStringify({ status: 'ok', message: 'Dante AI Data Agent is running' }));
   } else {
     // Not found
     res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Not found' }));
+    res.end(safeJsonStringify({ error: 'Not found' }));
   }
 };
 

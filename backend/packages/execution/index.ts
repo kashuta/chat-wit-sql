@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { QueryPlan, QueryResponse, DatabaseService, ErrorType } from '@common/types';
-import { createTypedError } from '@common/utils';
+import { createTypedError, safeJsonStringify, serializeBigInt } from '@common/utils';
 import { getOpenAIModel, createOutputParser } from '@common/llm';
 import { executeSqlQuery as dbExecuteSqlQuery } from '@execution/database';
 import { EXECUTION_SYSTEM_PROMPT } from '../../data/prompts';
@@ -142,9 +142,9 @@ export const executeQueryPlan = async (
     
     const sqlQueriesStr = executedQueries.join('\n\n');
     logInfo('=== QUERY RESULTS BEFORE SENDING TO LLM ===');
-    logInfo(JSON.stringify(stepResults, null, 2));
+    logInfo(safeJsonStringify(stepResults));
     logInfo('=== END QUERY RESULTS ===');
-    const resultsStr = JSON.stringify(stepResults, null, 2);
+    const resultsStr = safeJsonStringify(stepResults);
     
     // Системное сообщение
     const systemMessage = {
@@ -181,13 +181,13 @@ Please interpret these results.`
     
     // Возвращаем структурированный ответ
     return {
-      data: stepResults,
+      data: serializeBigInt(stepResults),
       explanation: interpretation.explanation,
       confidence: interpretation.confidence,
       sql: sqlQueriesStr,
       visualization: {
         type: interpretation.visualizationType as 'table' | 'line' | 'bar' | 'pie',
-        data: stepResults,
+        data: serializeBigInt(stepResults),
       },
       errors: Object.keys(executionErrors).length > 0 ? executionErrors : undefined,
     };

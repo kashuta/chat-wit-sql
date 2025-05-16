@@ -6,10 +6,6 @@ import { getOpenAIModel, createOutputParser } from '@common/llm';
 import { databaseKnowledge } from '@common/knowledge';
 import { PLANNING_SYSTEM_PROMPT } from '../../data/prompts';
 
-/**
- * Loads SQL instructions from a file
- * @returns String with instructions
- */
 const loadSqlGuidelines = (): string => {
   try {
     const guidePath = path.join(process.cwd(), 'data', 'sql-guidelines.json');
@@ -24,7 +20,6 @@ const loadSqlGuidelines = (): string => {
     let result = 'IMPORTANT RULES FOR POSTGRESQL:\n\n';
     
     if (guidelines.postgresqlGuidelines) {
-      // Add rules
       for (const rule of guidelines.postgresqlGuidelines) {
         result += `### ${rule.rule}\n`;
         if (rule.example) {
@@ -55,6 +50,7 @@ const loadSqlGuidelines = (): string => {
     return '';
   }
 };
+
 const queryPlanSchema = z.object({
   steps: z.array(
     z.object({
@@ -96,19 +92,13 @@ const queryPlanSchema = z.object({
   ).describe('Database services required to answer this query'),
 });
 
-// Define the output type from the zod schema
 type PlanningOutput = z.infer<typeof queryPlanSchema>;
 
-/**
- * Gets the system prompt with placeholders replaced
- * @returns Formatted system prompt
- */
 const getSystemPrompt = (): string => {
   const sqlGuidelines = loadSqlGuidelines();
   
   let basePrompt = PLANNING_SYSTEM_PROMPT;
   
-  // Replace placeholders with actual data
   basePrompt = basePrompt.replace('DATABASE_DESCRIPTIONS_PLACEHOLDER', 
     databaseKnowledge.isLoaded() ? databaseKnowledge.getDetailedDatabaseDescriptionsForLLM() : `
     Available database services:
@@ -132,12 +122,6 @@ const getSystemPrompt = (): string => {
   return basePrompt;
 };
 
-/**
- * Creates a query plan based on the perception result
- * @param perceptionResult - Result from the perception module
- * @param query - Original user query
- * @returns Query plan
- */
 export const createQueryPlan = async (
   perceptionResult: PerceptionResult,
   query: string
@@ -150,13 +134,11 @@ export const createQueryPlan = async (
     const entitiesStr = JSON.stringify(entities);
     const servicesStr = JSON.stringify(requiredServices);
     
-    // System message
     const systemMessage = {
       role: 'system',
       content: getSystemPrompt()
     };
     
-    // User message
     const userMessage = {
       role: 'user',
       content: `User query: ${query}
@@ -165,10 +147,12 @@ Intent analysis: ${intent}
 Required services from perception: ${servicesStr}
 Extracted entities: ${entitiesStr}
 
+IMPORTANT: Do NOT use dot notation like 'wallet.Transaction' when specifying service. Only use valid service names from the list.
+Always specify table names in the SQL query, not in the service name.
+
 Please create a plan to answer this query.`
     };
     
-    // Prepare messages for the model
     const messages = [systemMessage, userMessage];
     
     const response = await model.invoke(messages);
@@ -181,46 +165,171 @@ Please create a plan to answer this query.`
     
     const result = await parser.parse(response.content) as PlanningOutput;
 
-    return {
-      steps: result.steps.map(step => ({
-        service: step.service as DatabaseService,
-        description: step.description,
-        sqlQuery: step.sqlQuery,
-      })),
-      requiredServices: result.requiredServices as DatabaseService[],
-    };
+    const validatedPlan = validatePlanAgainstSchema(result);
+    return validatedPlan;
   } catch (error) {
     console.error('Error in planning module:', error);
-    // Return a fallback plan with basic information retrieval
-    return {
-      steps: perceptionResult.requiredServices.map(service => {
-        let defaultQuery: string;
-        
-        // Default queries for each service
+    
+    return createFallbackPlan(perceptionResult, query);
+  }
+};
+
+function validatePlanAgainstSchema(plan: PlanningOutput): QueryPlan {
+  const validatedPlan: QueryPlan = {
+    steps: [],
+    requiredServices: plan.requiredServices as DatabaseService[],
+  };
+
+  for (const step of plan.steps) {
+    const service = step.service as DatabaseService;
+    
+    if (!step.sqlQuery) {
+      validatedPlan.steps.push({
+        service,
+        description: step.description,
+        sqlQuery: `SELECT * FROM information_schema.tables LIMIT 10`,
+      });
+      continue;
+    }
+    
+    const extractedTableNames = extractTableNames(step.sqlQuery);
+    let validQuery = step.sqlQuery;
+    
+    for (const tableName of extractedTableNames) {
+      const dbInfo = databaseKnowledge.getDatabaseDescription(service);
+      
+      if (dbInfo) {
+        const tableExists = dbInfo.tables.some(t => 
+          t.name.toLowerCase() === tableName.toLowerCase());
+          
+        if (!tableExists) {
+          const similarTables = findSimilarTables(dbInfo.tables, tableName);
+          
+          if (similarTables.length > 0) {
+            const correctTable = similarTables[0];
+            validQuery = validQuery.replace(
+              new RegExp(`\\b${tableName}\\b`, 'gi'),
+              `"${correctTable}"`
+            );
+          }
+        } else {
+          const exactTable = dbInfo.tables.find(t => 
+            t.name.toLowerCase() === tableName.toLowerCase());
+            
+          if (exactTable && exactTable.name !== tableName) {
+            validQuery = validQuery.replace(
+              new RegExp(`\\b${tableName}\\b`, 'gi'),
+              `"${exactTable.name}"`
+            );
+          }
+        }
+      }
+    }
+    
+    validatedPlan.steps.push({
+      service,
+      description: step.description,
+      sqlQuery: validQuery,
+    });
+  }
+  
+  return validatedPlan;
+}
+
+function extractTableNames(query: string): string[] {
+  const tableRegex = /FROM\s+["']?([a-zA-Z0-9_]+)["']?/gi;
+  const tables = new Set<string>();
+  let match;
+  
+  while ((match = tableRegex.exec(query)) !== null) {
+    tables.add(match[1]);
+  }
+  
+  const joinRegex = /JOIN\s+["']?([a-zA-Z0-9_]+)["']?/gi;
+  while ((match = joinRegex.exec(query)) !== null) {
+    tables.add(match[1]);
+  }
+  
+  return Array.from(tables);
+}
+
+function findSimilarTables(tables: any[], tableName: string): string[] {
+  return tables
+    .map(t => t.name)
+    .filter(name => 
+      name.toLowerCase().includes(tableName.toLowerCase()) || 
+      tableName.toLowerCase().includes(name.toLowerCase()))
+    .sort((a, b) => {
+      const scoreA = calculateSimilarity(tableName, a);
+      const scoreB = calculateSimilarity(tableName, b);
+      return scoreB - scoreA;
+    });
+}
+
+function calculateSimilarity(a: string, b: string): number {
+  const aLower = a.toLowerCase();
+  const bLower = b.toLowerCase();
+  
+  if (aLower === bLower) return 1;
+  if (aLower.includes(bLower) || bLower.includes(aLower)) return 0.8;
+  
+  let matches = 0;
+  const minLength = Math.min(a.length, b.length);
+  
+  for (let i = 0; i < minLength; i++) {
+    if (aLower[i] === bLower[i]) matches++;
+  }
+  
+  return matches / Math.max(a.length, b.length);
+}
+
+function createFallbackPlan(perceptionResult: PerceptionResult, _query: string): QueryPlan {
+  const knownTables = new Map<string, string[]>();
+  
+  if (databaseKnowledge.isLoaded()) {
+    const allDatabases = databaseKnowledge.getAllDatabases();
+    
+    for (const db of allDatabases) {
+      knownTables.set(db.service, db.tables.map(t => t.name));
+    }
+  }
+  
+  return {
+    steps: perceptionResult.requiredServices.map(service => {
+      let defaultQuery: string;
+      const serviceTableNames = knownTables.get(service) || [];
+      
+      if (serviceTableNames.length > 0) {
+        const tableName = serviceTableNames[0];
+        defaultQuery = `SELECT * FROM "${tableName}" LIMIT 10`;
+      } else {
         switch(service) {
           case 'wallet':
-            defaultQuery = 'SELECT * FROM wallets LIMIT 10';
+            defaultQuery = 'SELECT * FROM "Transaction" LIMIT 10';
             break;
           case 'bets-history':
-            defaultQuery = 'SELECT * FROM bets LIMIT 10';
+            defaultQuery = 'SELECT * FROM "Bet" LIMIT 10';
             break;
           case 'user-activities':
-            defaultQuery = 'SELECT * FROM activities LIMIT 10';
+            defaultQuery = 'SELECT * FROM "Activity" LIMIT 10';
             break;
           case 'financial-history':
-            defaultQuery = 'SELECT * FROM transactions LIMIT 10';
+            defaultQuery = 'SELECT * FROM "FinancialTransaction" LIMIT 10';
+            break;
+          case 'pam':
+            defaultQuery = 'SELECT * FROM "User" LIMIT 10';
             break;
           default:
-            defaultQuery = 'SELECT * FROM information_schema.tables LIMIT 10';
+            defaultQuery = 'SELECT table_name FROM information_schema.tables WHERE table_schema = \'public\' LIMIT 20';
         }
-        
-        return {
-          service,
-          description: `Fallback information retrieval for ${service}`,
-          sqlQuery: defaultQuery,
-        };
-      }),
-      requiredServices: perceptionResult.requiredServices,
-    };
-  }
-}; 
+      }
+      
+      return {
+        service,
+        description: `Fallback information retrieval for ${service}`,
+        sqlQuery: defaultQuery,
+      };
+    }),
+    requiredServices: perceptionResult.requiredServices,
+  };
+}

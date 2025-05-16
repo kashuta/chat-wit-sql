@@ -52,6 +52,48 @@ export const safeSqlIdentifier = (identifier: string): string => {
 };
 
 /**
+ * Safely serializes an object to JSON, properly handling BigInt values
+ * @param data - Any data structure that may contain BigInt values
+ * @returns JSON string with BigInt values converted to strings
+ */
+export const safeJsonStringify = (data: any): string => {
+  return JSON.stringify(data, (_, value) => 
+    typeof value === 'bigint' ? value.toString() : value
+  );
+};
+
+/**
+ * Transforms any object with BigInt values to have string representations instead
+ * @param data - Data object or array that may contain BigInt values
+ * @returns Same structure with BigInt values converted to strings
+ */
+export const serializeBigInt = (data: any): any => {
+  if (data === null || data === undefined) {
+    return data;
+  }
+  
+  if (typeof data === 'bigint') {
+    return data.toString();
+  }
+  
+  if (Array.isArray(data)) {
+    return data.map(serializeBigInt);
+  }
+  
+  if (typeof data === 'object') {
+    const result: Record<string, any> = {};
+    for (const key in data) {
+      if (Object.prototype.hasOwnProperty.call(data, key)) {
+        result[key] = serializeBigInt(data[key]);
+      }
+    }
+    return result;
+  }
+  
+  return data;
+};
+
+/**
  * Converts an array of objects to CSV format
  * @param data - Array of objects
  * @returns CSV formatted string
@@ -60,7 +102,14 @@ export const objectsToCsv = (data: Record<string, unknown>[]): string => {
   if (data.length === 0) return '';
   
   const headers = Object.keys(data[0]);
-  const rows = data.map(obj => headers.map(header => JSON.stringify(obj[header] ?? '')).join(','));
+  const rows = data.map(obj => 
+    headers.map(header => {
+      const value = obj[header];
+      return typeof value === 'bigint' 
+        ? `"${value.toString()}"` 
+        : JSON.stringify(value ?? '');
+    }).join(',')
+  );
   
   return [headers.join(','), ...rows].join('\n');
 }; 
