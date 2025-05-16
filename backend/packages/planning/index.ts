@@ -5,6 +5,7 @@ import { QueryPlan, DatabaseService, PerceptionResult } from '@common/types';
 import { getOpenAIModel, createOutputParser } from '@common/llm';
 import { databaseKnowledge } from '@common/knowledge';
 import { PLANNING_SYSTEM_PROMPT } from '../../data/prompts';
+import { resolveConflictsInPlan } from '../conflict-resolution';
 
 const loadSqlGuidelines = (): string => {
   try {
@@ -166,6 +167,19 @@ Please create a plan to answer this query.`
     const result = await parser.parse(response.content) as PlanningOutput;
 
     const validatedPlan = validatePlanAgainstSchema(result);
+    
+    // Проверяем план на конфликты таблиц и пытаемся их разрешить
+    const conflictResolution = await resolveConflictsInPlan(validatedPlan, query);
+    
+    // Если были внесены изменения, логируем это
+    if (conflictResolution.amended) {
+      console.log(`Plan was amended to resolve table conflicts. Affected tables: ${
+        conflictResolution.conflicts.map((c: any) => c.tableName).join(', ')
+      }`);
+      
+      return conflictResolution.resolvedPlan;
+    }
+    
     return validatedPlan;
   } catch (error) {
     console.error('Error in planning module:', error);
@@ -199,7 +213,7 @@ function validatePlanAgainstSchema(plan: PlanningOutput): QueryPlan {
       const dbInfo = databaseKnowledge.getDatabaseDescription(service);
       
       if (dbInfo) {
-        const tableExists = dbInfo.tables.some(t => 
+        const tableExists = dbInfo.tables.some((t: any) => 
           t.name.toLowerCase() === tableName.toLowerCase());
           
         if (!tableExists) {
@@ -213,7 +227,7 @@ function validatePlanAgainstSchema(plan: PlanningOutput): QueryPlan {
             );
           }
         } else {
-          const exactTable = dbInfo.tables.find(t => 
+          const exactTable = dbInfo.tables.find((t: any) => 
             t.name.toLowerCase() === tableName.toLowerCase());
             
           if (exactTable && exactTable.name !== tableName) {
@@ -290,12 +304,12 @@ function createFallbackPlan(perceptionResult: PerceptionResult, _query: string):
     const allDatabases = databaseKnowledge.getAllDatabases();
     
     for (const db of allDatabases) {
-      knownTables.set(db.service, db.tables.map(t => t.name));
+      knownTables.set(db.service, db.tables.map((t: any) => t.name));
     }
   }
   
   return {
-    steps: perceptionResult.requiredServices.map(service => {
+    steps: perceptionResult.requiredServices.map((service: any) => {
       let defaultQuery: string;
       const serviceTableNames = knownTables.get(service) || [];
       
