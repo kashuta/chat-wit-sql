@@ -1,123 +1,114 @@
-# Dante AI Data Agent
+# Chat with SQL: Интеллектуальный SQL-ассистент для распределенных баз данных
 
-An intelligent agent that automatically extracts and combines data from PostgreSQL databases in the Dante project, answers analytical queries with high accuracy, and provides transparent decision-making through a clean React interface.
+Интеллектуальный агент, который автоматически анализирует запросы на естественном языке, извлекает и комбинирует данные из распределенных PostgreSQL баз данных, отвечает на аналитические запросы с высокой точностью и предоставляет прозрачное объяснение процесса через современный React-интерфейс.
 
-## Project Overview
+## О проекте
 
-The Dante AI Data Agent leverages LangChain.js and LangGraph to create a modular AI system capable of:
+Chat with SQL - это решение для аналитики, которое упрощает работу с распределенными данными за счет:
 
-- Automated data extraction and combination from multiple PostgreSQL databases
-- Precise answers to analytical queries about gaming and financial activity
-- Transparent SQL query generation and explanation
-- Interactive data visualization through tables and charts
+- Понимания запросов на естественном языке и их преобразования в SQL
+- Автоматического извлечения и объединения данных из нескольких сервисов PostgreSQL
+- Интеллектуального планирования запросов с учетом зависимостей между данными
+- Кэширования результатов запросов в Redis для повышения производительности
+- Визуализации результатов запросов через интерактивные таблицы и графики
 
-## Project Status
+## Как это работает
 
-✅ **Development Status**: 92% Complete (77/84 tasks)
+### Архитектура системы
 
-The project is nearly complete with most core features implemented:
-- ✅ Backend API with modular architecture
-- ✅ Database integrations (wallet, bets-history, user-activities, financial-history)
-- ✅ SQL generation and execution
-- ✅ Frontend visualization components
-- ✅ Interactive query interface
+Система построена на основе CQRS и Event Sourcing и состоит из трех основных модулей:
 
-## Architecture
+1. **Модуль восприятия (Perception)**: Анализирует пользовательские запросы на естественном языке для определения:
+   - Намерения пользователя и уровня достоверности
+   - Необходимых источников данных (сервисов)
+   - Первичных SQL-запросов для извлечения данных
 
-The project follows a modular architecture with three main components:
+2. **Модуль планирования (Planning)**: Создает оптимальный план выполнения запросов:
+   - Строит граф зависимостей между запросами
+   - Определяет порядок выполнения с учетом межсервисных связей
+   - Создает промежуточные шаги для объединения данных из разных сервисов
 
-1. **Perception Module**: Analyzes user queries to determine intent and required data sources
-2. **Planning Module**: Creates a plan for executing SQL queries across different services
-3. **Execution Module**: Runs the queries and formats the results for visualization
+3. **Модуль выполнения (Execution)**: Отвечает за выполнение плана запросов:
+   - Устанавливает соединения с требуемыми базами данных
+   - Выполняет SQL-запросы в оптимальном порядке
+   - Кэширует промежуточные результаты в Redis
+   - Обрабатывает ошибки и предоставляет фолбэк-стратегии
+   - Объединяет данные в единый результат
 
-## Tech Stack
+### Жизненный цикл запроса
+
+1. Пользователь отправляет запрос на естественном языке через веб-интерфейс
+2. Система анализирует запрос с помощью модели OpenAI
+3. Создается план запросов с учетом структуры баз данных
+4. План оптимизируется с учетом зависимостей и межсервисных отношений
+5. Запросы выполняются в указанном порядке на соответствующих сервисах
+6. Промежуточные результаты кэшируются в Redis
+7. Данные комбинируются согласно плану
+8. Результат форматируется и отправляется пользователю
+9. Пользователь видит как результат, так и подробное объяснение процесса выполнения
+
+## Технический стек
 
 ### Backend
-- Node.js with TypeScript (functional programming style)
-- LangChain.js for AI integrations
-- PostgreSQL database access with Prisma ORM
-- OpenAI 4o-mini models for natural language processing
+- Node.js с TypeScript (функциональный стиль программирования)
+- Fastify для API
+- Prisma ORM для доступа к PostgreSQL
+- Redis для кэширования результатов запросов и межсервисного обмена данными
+- OpenAI 4o-mini модели для обработки естественного языка
 
 ### Frontend
-- React with TypeScript
-- Vite for fast development experience
-- Custom UI components for data visualization
+- React с TypeScript
+- Vite для быстрой разработки
+- Компоненты для визуализации данных и интерактивного взаимодействия
 
-## Setup and Installation
+## Распределенное хранилище данных
 
-### Prerequisites
-- Node.js 16+
-- npm 7+
-- PostgreSQL 15+ (or Docker)
+Система работает с несколькими сервисами баз данных, каждый из которых представляет отдельный домен:
 
-### Installation
+- **wallet**: Балансы пользователей и транзакции
+- **bets-history**: История ставок (казино и спорт)
+- **user-activities**: Логи активности пользователей
+- **financial-history**: Финансовые транзакции
+- **pam**: Управление учетными записями игроков
+- **payment-gateway**: Платежный шлюз
+- **casino-st8**: Данные игр казино
+- **traffic**: Источники трафика и аналитика
+- **kyc**: Верификация пользователей
+- **geolocation**: Географические данные
+- **affiliate**: Партнерская программа
+- **notification**: Система уведомлений
+- **optimove**: CRM-система
 
-1. Clone the repository:
-```bash
-git clone https://github.com/kashuta/chat-wit-sql.git
-cd chat-wit-sql
-```
+## Отказоустойчивость и производительность
 
-2. Install dependencies:
-```bash
-npm install
-```
+Система разработана с учетом высоких требований к надежности и производительности:
 
-3. Setup database connections:
-```bash
-# If using Docker
-docker-compose up -d db
+- **Кэширование результатов запросов**: Redis используется для хранения промежуточных и конечных результатов запросов
+- **Фолбэк в память**: При недоступности Redis система автоматически переключается на хранение в памяти
+- **Обработка ошибок**: Каждый шаг выполнения включает механизмы восстановления после сбоев
+- **Мониторинг состояния**: Постоянное отслеживание состояния соединений с базами данных и Redis
+- **Оптимизация запросов**: Анализ и улучшение SQL-запросов для повышения производительности
 
-# Generate Prisma clients
-cd backend
-npm run prisma:generate
-```
+## Настройка и установка
 
-4. Update the `.env` file with your OpenAI API key:
-```bash
-# OpenAI API key is required for production use
-# In development mode, mock data is used if API key is invalid
-OPENAI_API_KEY=your_openai_api_key
-```
+Подробные инструкции по установке и настройке находятся в [SETUP.md](./SETUP.md).
 
-### Running the Project
-
-Start both frontend and backend in development mode:
-
-```bash
-npm run dev
-```
-
-Or run them separately:
-
-```bash
-# Backend only
-npm run dev:backend
-
-# Frontend only
-npm run dev:frontend
-```
-
-The services will be available at:
-- Backend: http://localhost:3000
-- Frontend: http://localhost:3004
-
-## Project Structure
+## Структура проекта
 
 ```
-├── backend/                # Backend codebase
-│   ├── packages/           # Core modules
-│   │   ├── common/         # Shared utilities and types
-│   │   ├── perception/     # Query analysis module
-│   │   ├── planning/       # SQL planning module
-│   │   └── execution/      # Query execution module
-│   ├── prisma/             # Prisma schema and database configuration
-│   │   └── services/       # Service-specific Prisma schemas
-│   ├── scripts/            # Utility scripts for setup
-│   └── src/                # Backend entry point
-├── frontend/               # Frontend codebase
-│   └── src/                # React application
-└── package.json            # Root package for monorepo setup
+├── backend/                # Backend кодовая база
+│   ├── packages/           # Основные модули
+│   │   ├── common/         # Общие утилиты и типы
+│   │   ├── perception/     # Модуль анализа запросов
+│   │   ├── planning/       # Модуль планирования SQL
+│   │   └── execution/      # Модуль выполнения запросов
+│   ├── prisma/             # Prisma схемы и настройки БД
+│   │   └── services/       # Схемы для отдельных сервисов
+│   ├── scripts/            # Скрипты для настройки
+│   └── src/                # Точка входа бэкенда
+├── frontend/               # Frontend кодовая база
+│   └── src/                # React приложение
+└── package.json            # Корневой package.json для монорепозитория
 ```
 
 ## Features
